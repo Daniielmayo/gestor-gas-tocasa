@@ -12,6 +12,7 @@ import styles from './recurrentes.module.css';
 import { useAuth } from '@/context/AuthContext';
 import { db } from '@/lib/firebase';
 import { collection, query, where, onSnapshot, addDoc, serverTimestamp, or, doc, updateDoc, deleteDoc, getDocs, arrayUnion } from 'firebase/firestore';
+import { formatCOP, formatInputCOP, parseCOP } from '@/lib/currency';
 
 interface Payment {
   id: string;
@@ -83,17 +84,19 @@ export default function RecurringPayments() {
     }
 
     try {
-      await addDoc(collection(db, 'recurringPayments'), {
+      const paymentData = {
         title: title.trim(),
-        amount: amount.trim(),
-        days: selectedDays,
+        amount: parseCOP(amount),
+        days: selectedDays.sort((a,b) => a - b),
         ownerId: user.uid,
         sharedWith: [],
         createdAt: serverTimestamp()
-      });
+      };
+
+      await addDoc(collection(db, 'recurringPayments'), paymentData);
       
       import('@/lib/history').then(({ logActivity }) => {
-        logActivity(`<strong>${profile.displayName}</strong> programó el pago recurrente '${title.trim()}' por $${amount.trim()}`, user.uid, []);
+        logActivity(`<strong>${profile.displayName}</strong> programó el pago recurrente '${title.trim()}' por ${formatCOP(parseCOP(amount))}`, user.uid, []);
       });
 
       setTitle('');
@@ -213,11 +216,12 @@ export default function RecurringPayments() {
             onChange={(e) => setTitle(e.target.value)}
           />
           <Input 
-            label="Monto Estimado" 
-            placeholder="$0.00" 
-            type="number"
+            label="Monto" 
+            placeholder="Ej. 1.500.000" 
+            type="text"
             value={amount}
-            onChange={(e) => setAmount(e.target.value)}
+            onChange={(e) => setAmount(formatInputCOP(e.target.value))}
+            required
           />
           
           <div className={styles.frequencyGroup}>
@@ -282,7 +286,7 @@ export default function RecurringPayments() {
                   Se cobra los días: {payment.days.sort((a,b) => a - b).join(', ')} de cada mes
                 </p>
                 <div style={{ marginTop: '4px' }}>
-                  <span className="text-headline-sm">${payment.amount}</span>
+                  <span className="text-headline-sm">{formatCOP(Number(payment.amount))}</span>
                 </div>
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>

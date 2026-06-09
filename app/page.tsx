@@ -17,6 +17,7 @@ import styles from './dashboard.module.css';
 import { useAuth } from '@/context/AuthContext';
 import { db } from '@/lib/firebase';
 import { collection, query, where, onSnapshot, addDoc, serverTimestamp, or } from 'firebase/firestore';
+import { formatCOP } from '@/lib/currency';
 
 interface SharedList {
   id: string;
@@ -42,6 +43,10 @@ export default function Dashboard() {
 
   const [upcomingPayments, setUpcomingPayments] = useState<any[]>([]);
   const [isLoadingPayment, setIsLoadingPayment] = useState(true);
+
+  const [currentMonthBalance, setCurrentMonthBalance] = useState(0);
+  const [prevMonthBalance, setPrevMonthBalance] = useState(0);
+  const [isLoadingFinances, setIsLoadingFinances] = useState(true);
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
@@ -114,9 +119,49 @@ export default function Dashboard() {
       setIsLoadingPayment(false);
     });
 
+    // 3. Subscribe to transactions for balances
+    const txRef = collection(db, 'transactions');
+    const qTx = query(
+      txRef,
+      or(
+        where('ownerId', '==', user.uid),
+        where('sharedWith', 'array-contains', user.uid)
+      )
+    );
+    const unsubTx = onSnapshot(qTx, (snapshot) => {
+      let currBalance = 0;
+      let prevBalance = 0;
+      
+      const now = new Date();
+      const currentMonth = now.getMonth();
+      const currentYear = now.getFullYear();
+      
+      const prevDate = new Date(currentYear, currentMonth - 1, 1);
+      const prevMonth = prevDate.getMonth();
+      const prevYear = prevDate.getFullYear();
+
+      snapshot.forEach(doc => {
+        const t = doc.data();
+        const txDate = t.createdAt ? t.createdAt.toDate() : new Date();
+        const m = txDate.getMonth();
+        const y = txDate.getFullYear();
+        
+        if (m === currentMonth && y === currentYear) {
+          currBalance += (t.type === 'income' ? t.amount : -t.amount);
+        } else if (m === prevMonth && y === prevYear) {
+          prevBalance += (t.type === 'income' ? t.amount : -t.amount);
+        }
+      });
+      
+      setCurrentMonthBalance(currBalance);
+      setPrevMonthBalance(prevBalance);
+      setIsLoadingFinances(false);
+    });
+
     return () => {
       unsubLists();
       unsubPayments();
+      unsubTx();
     };
   }, [user]);
 
@@ -163,7 +208,6 @@ export default function Dashboard() {
   }
 
   const topLists = lists.slice(0, 3);
-  const nextPayment = upcomingPayments.length > 0 ? upcomingPayments[0] : null;
   const topPayments = upcomingPayments.slice(0, 3);
 
   return (
@@ -202,40 +246,24 @@ export default function Dashboard() {
 
       {/* Balance/Pending Card */}
       <Card className={styles.balanceCard}>
-        {isLoadingPayment ? (
+        {isLoadingFinances ? (
           <div style={{ padding: '20px 0', textAlign: 'center' }}>
-            <Spinner fullScreen={false} message="Calculando pagos..." />
-          </div>
-        ) : !nextPayment ? (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '16px 0', gap: '8px' }}>
-            <CheckCircle2 size={48} color="#FFF" />
-            <h2 className="text-headline-md" style={{ color: '#FFF' }}>Todo al día</h2>
-            <p className="text-body-sm" style={{ color: 'rgba(255,255,255,0.8)' }}>No tienes pagos programados</p>
+            <Spinner fullScreen={false} message="Calculando finanzas..." />
           </div>
         ) : (
-          <>
-            <div className={styles.balanceHeader}>
-              <span className="text-label-md" style={{ color: 'var(--color-primary-container)' }}>
-                Próximo pago: {nextPayment.title}
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', padding: '16px 0' }}>
+            <span className="text-label-md" style={{ color: 'var(--color-primary-container)', opacity: 0.9 }}>
+              Balance Actual
+            </span>
+            <h2 className="text-display-lg" style={{ color: '#FFF' }}>
+              {formatCOP(currentMonthBalance)}
+            </h2>
+            <div style={{ background: 'rgba(255,255,255,0.1)', padding: '4px 12px', borderRadius: '16px', marginTop: '8px' }}>
+              <span className="text-label-sm" style={{ color: 'rgba(255,255,255,0.7)' }}>
+                Mes anterior: {formatCOP(prevMonthBalance)}
               </span>
-              <Receipt size={20} color="var(--color-primary-container)" />
             </div>
-            <h2 className="text-display-lg" style={{ color: '#FFF' }}>${nextPayment.amount}</h2>
-            <div className={styles.balanceFooter}>
-              <span className="text-label-sm">
-                {nextPayment.daysUntil === 0
-                  ? 'Vence HOY'
-                  : nextPayment.daysUntil === 1
-                    ? 'Vence MAÑANA'
-                    : `Vence en ${nextPayment.daysUntil} días`}
-              </span>
-              <Link href="/pagos/recurrentes">
-                <Button variant="secondary" size="sm" style={{ color: 'var(--color-primary)' }}>
-                  Ver Pagos
-                </Button>
-              </Link>
-            </div>
-          </>
+          </div>
         )}
       </Card>
 

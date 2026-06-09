@@ -7,11 +7,12 @@ import { Spinner } from '@/components/ui/Spinner';
 import { Modal } from '@/components/ui/Modal';
 import { Input } from '@/components/ui/Input';
 import { SpeedDial } from '@/components/ui/SpeedDial';
-import { ArrowLeft, ArrowUpRight, ArrowDownRight, TrendingUp, TrendingDown, Wallet, ChevronLeft, ChevronRight } from 'lucide-react';
+import { ArrowLeft, ArrowUpRight, ArrowDownRight, TrendingUp, TrendingDown, Wallet, ChevronLeft, ChevronRight, Settings, UserPlus, Trash2 } from 'lucide-react';
 import styles from './finanzas.module.css';
 import { useAuth } from '@/context/AuthContext';
 import { db } from '@/lib/firebase';
-import { collection, query, where, onSnapshot, addDoc, Timestamp, or } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, addDoc, Timestamp, or, doc, setDoc, arrayUnion, getDocs, deleteDoc } from 'firebase/firestore';
+import { formatCOP, formatInputCOP, parseCOP } from '@/lib/currency';
 
 interface Transaction {
   id: string;
@@ -21,10 +22,17 @@ interface Transaction {
   description: string;
   createdAt: any;
   ownerId: string;
+  ownerName?: string;
+}
+
+interface CustomCategory {
+  id: string;
+  name: string;
+  type: 'income' | 'expense';
 }
 
 export default function Finanzas() {
-  const { user, loading } = useAuth();
+  const { user, profile, loading } = useAuth();
   const router = useRouter();
 
   const [transactions, setTransactions] = useState<Transaction[]>([]);
@@ -40,8 +48,24 @@ export default function Finanzas() {
   const [transactionDate, setTransactionDate] = useState(() => new Date().toISOString().split('T')[0]);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const predefinedIncomeCategories = ['Sueldo', 'Venta', 'Transferencia', 'Otro'];
-  const predefinedExpenseCategories = ['Supermercado', 'Servicios', 'Alquiler', 'Transporte', 'Ocio', 'Salud', 'Educación', 'Otro'];
+  // Sharing state
+  const [financeSettings, setFinanceSettings] = useState<any>(null);
+  const [isShareModalOpen, setIsShareModalOpen] = useState(false);
+  const [shareEmail, setShareEmail] = useState('');
+  const [isSharing, setIsSharing] = useState(false);
+
+  // Filter state
+  const [filterMode, setFilterMode] = useState<'all' | 'personal' | 'shared'>('all');
+
+  // Custom Categories state
+  const [customCategories, setCustomCategories] = useState<CustomCategory[]>([]);
+  const [isCategoriesModalOpen, setIsCategoriesModalOpen] = useState(false);
+  const [newCatName, setNewCatName] = useState('');
+  const [newCatType, setNewCatType] = useState<'income' | 'expense'>('expense');
+  const [isAddingCat, setIsAddingCat] = useState(false);
+
+  const predefinedIncomeCategories = ['Sueldo', 'Venta', 'Transferencia'];
+  const predefinedExpenseCategories = ['Supermercado', 'Servicios', 'Alquiler', 'Transporte', 'Ocio', 'Salud', 'Educación'];
 
   useEffect(() => {
     if (!loading && !user) {
@@ -78,7 +102,28 @@ export default function Finanzas() {
       setIsReady(true);
     });
 
-    return () => unsubTx();
+    const settingsRef = doc(db, 'financeSettings', user.uid);
+    const unsubSettings = onSnapshot(settingsRef, (docSnap) => {
+      if (docSnap.exists()) {
+        setFinanceSettings(docSnap.data());
+      } else {
+        setFinanceSettings({ sharedWith: [] });
+      }
+    });
+
+    const catRef = collection(db, 'financeCategories');
+    const qCat = query(catRef, where('ownerId', '==', user.uid));
+    const unsubCat = onSnapshot(qCat, (snapshot) => {
+      const data: CustomCategory[] = [];
+      snapshot.forEach(d => data.push({ id: d.id, ...d.data() } as CustomCategory));
+      setCustomCategories(data);
+    });
+
+    return () => {
+      unsubTx();
+      unsubSettings();
+      unsubCat();
+    };
   }, [user]);
 
   const handleAddTransaction = async (e: React.FormEvent) => {
@@ -93,11 +138,12 @@ export default function Finanzas() {
       
       await addDoc(collection(db, 'transactions'), {
         type: transactionType,
-        amount: parseFloat(amount),
+        amount: parseCOP(amount),
         category: finalCategory,
         description,
         ownerId: user.uid,
-        sharedWith: [], // Can be updated if sharing finances
+        ownerName: profile?.displayName?.split(' ')[0] || 'Usuario',
+        sharedWith: financeSettings?.sharedWith || [],
         createdAt: Timestamp.fromDate(dateObj)
       });
       setIsModalOpen(false);
@@ -119,6 +165,74 @@ export default function Finanzas() {
     setCustomCategory('');
     setTransactionDate(new Date().toISOString().split('T')[0]);
     setIsModalOpen(true);
+  };
+
+  const handleShareFinance = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!shareEmail.trim() || !user || !profile) return;
+    setIsSharing(true);
+
+    try {
+      const usersRef = collection(db, 'users');
+      const q = query(usersRef, where('email', '==', shareEmail.trim().toLowerCase()));
+      const snap = await getDocs(q);
+
+      if (snap.empty) {
+        alert("Ese correo electrónico no está registrado en la app.");
+        setIsSharing(false);
+        return;
+      }
+
+      const friendDoc = snap.docs[0];
+      const friendUid = friendDoc.data().uid;
+      const friendName = friendDoc.data().displayName || shareEmail;
+
+      if (friendUid === user.uid) {
+        alert("No puedes invitarte a ti mismo.");
+        setIsSharing(false);
+        return;
+      }
+
+      const settingsRef = doc(db, 'financeSettings', user.uid);
+      await setDoc(settingsRef, {
+        sharedWith: arrayUnion(friendUid)
+      }, { merge: true });
+
+      alert(`¡Finanzas compartidas con éxito con ${friendName}!`);
+      setIsShareModalOpen(false);
+      setShareEmail('');
+    } catch (error) {
+      console.error(error);
+      alert("Hubo un error al compartir.");
+    } finally {
+      setIsSharing(false);
+    }
+  };
+
+  const handleAddCategory = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newCatName.trim() || !user) return;
+    setIsAddingCat(true);
+    try {
+      await addDoc(collection(db, 'financeCategories'), {
+        name: newCatName.trim(),
+        type: newCatType,
+        ownerId: user.uid
+      });
+      setNewCatName('');
+    } catch (error) {
+      console.error(error);
+    } finally {
+      setIsAddingCat(false);
+    }
+  };
+
+  const handleDeleteCategory = async (id: string) => {
+    try {
+      await deleteDoc(doc(db, 'financeCategories', id));
+    } catch (error) {
+      console.error(error);
+    }
   };
 
   if (loading || !user || !isReady) {
@@ -143,12 +257,23 @@ export default function Finanzas() {
 
   const filteredTransactions = transactions.filter(t => {
     const txDate = t.createdAt ? t.createdAt.toDate() : new Date();
-    return txDate.getMonth() === currentDate.getMonth() && txDate.getFullYear() === currentDate.getFullYear();
+    const matchesMonth = txDate.getMonth() === currentDate.getMonth() && txDate.getFullYear() === currentDate.getFullYear();
+    if (!matchesMonth) return false;
+
+    if (filterMode === 'personal') {
+      return t.ownerId === user.uid;
+    } else if (filterMode === 'shared') {
+      return t.ownerId !== user.uid;
+    }
+    return true; // 'all'
   });
 
   const totalIncome = filteredTransactions.filter(t => t.type === 'income').reduce((acc, t) => acc + t.amount, 0);
   const totalExpense = filteredTransactions.filter(t => t.type === 'expense').reduce((acc, t) => acc + t.amount, 0);
   const balance = totalIncome - totalExpense;
+
+  const incomeCats = [...predefinedIncomeCategories, ...customCategories.filter(c => c.type === 'income').map(c => c.name), 'Otro'];
+  const expenseCats = [...predefinedExpenseCategories, ...customCategories.filter(c => c.type === 'expense').map(c => c.name), 'Otro'];
 
   return (
     <main className={`container ${styles.main}`}>
@@ -158,8 +283,17 @@ export default function Finanzas() {
             <ArrowLeft size={24} />
           </Button>
         </Link>
-        <h1 className="text-headline-md">Finanzas</h1>
-        <div style={{ width: 40 }} /> {/* Spacer */}
+        <div className={styles.titleContainer} style={{ flex: 1, overflow: 'hidden', marginLeft: '16px' }}>
+          <h1 className="text-headline-md">Finanzas</h1>
+        </div>
+        <div style={{ display: 'flex', gap: '4px' }}>
+          <Button variant="ghost" className={styles.iconBtn} onClick={() => setIsShareModalOpen(true)}>
+            <UserPlus size={20} color="var(--color-primary)" />
+          </Button>
+          <Button variant="ghost" className={styles.iconBtn} onClick={() => setIsCategoriesModalOpen(true)}>
+            <Settings size={20} />
+          </Button>
+        </div>
       </header>
 
       <div className={styles.monthSelector}>
@@ -179,10 +313,34 @@ export default function Finanzas() {
 
       <section>
         <div className={styles.balanceCard}>
-          <span className={styles.balanceTitle}>Balance Total</span>
+          <span className={styles.balanceTitle}>Balance {filterMode === 'all' ? 'Total' : filterMode === 'personal' ? 'Personal' : 'Compartido'}</span>
           <h2 className={`${styles.balanceAmount} ${balance >= 0 ? styles.balanceAmountPositive : styles.balanceAmountNegative}`}>
-            ${balance.toFixed(2)}
+            {formatCOP(balance)}
           </h2>
+        </div>
+
+        <div style={{ display: 'flex', gap: '8px', marginTop: '16px', overflowX: 'auto', paddingBottom: '8px' }}>
+          <Button 
+            variant={filterMode === 'all' ? 'primary' : 'secondary'} 
+            onClick={() => setFilterMode('all')}
+            style={{ borderRadius: '20px', padding: '4px 12px', fontSize: '14px', flex: '0 0 auto', minHeight: 'auto' }}
+          >
+            Todas
+          </Button>
+          <Button 
+            variant={filterMode === 'personal' ? 'primary' : 'secondary'} 
+            onClick={() => setFilterMode('personal')}
+            style={{ borderRadius: '20px', padding: '4px 12px', fontSize: '14px', flex: '0 0 auto', minHeight: 'auto' }}
+          >
+            Personales
+          </Button>
+          <Button 
+            variant={filterMode === 'shared' ? 'primary' : 'secondary'} 
+            onClick={() => setFilterMode('shared')}
+            style={{ borderRadius: '20px', padding: '4px 12px', fontSize: '14px', flex: '0 0 auto', minHeight: 'auto' }}
+          >
+            Compartidas
+          </Button>
         </div>
       </section>
 
@@ -210,11 +368,12 @@ export default function Finanzas() {
                     <span className={styles.transactionDate}>
                       {t.createdAt ? new Date(t.createdAt.toDate()).toLocaleDateString() : 'Hoy'}
                       {t.description && ` • ${t.description}`}
+                      {t.ownerId !== user.uid && t.ownerName && ` • Por ${t.ownerName}`}
                     </span>
                   </div>
                 </div>
                 <div className={`${styles.transactionAmount} ${t.type === 'income' ? styles.amountIncome : styles.amountExpense}`}>
-                  {t.type === 'income' ? '+' : '-'}${t.amount.toFixed(2)}
+                  {t.type === 'income' ? '+' : '-'}{formatCOP(t.amount)}
                 </div>
               </div>
             ))}
@@ -240,12 +399,11 @@ export default function Finanzas() {
       <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={`Nuevo ${transactionType === 'income' ? 'Ingreso' : 'Egreso'}`}>
         <form onSubmit={handleAddTransaction} style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginTop: '16px' }}>
           <Input 
-            label="Monto ($)" 
-            type="number"
-            step="0.01"
-            placeholder="Ej. 1500" 
+            label="Monto" 
+            type="text"
+            placeholder="Ej. 1.500.000" 
             value={amount}
-            onChange={(e) => setAmount(e.target.value)}
+            onChange={(e) => setAmount(formatInputCOP(e.target.value))}
             required
             autoFocus
           />
@@ -275,7 +433,7 @@ export default function Finanzas() {
               }}
             >
               <option value="" disabled>Selecciona una categoría</option>
-              {(transactionType === 'income' ? predefinedIncomeCategories : predefinedExpenseCategories).map(cat => (
+              {(transactionType === 'income' ? incomeCats : expenseCats).map(cat => (
                 <option key={cat} value={cat}>{cat}</option>
               ))}
             </select>
@@ -305,6 +463,100 @@ export default function Finanzas() {
             {isSubmitting ? 'Guardando...' : 'Guardar'}
           </Button>
         </form>
+      </Modal>
+
+      {/* Share Modal */}
+      <Modal isOpen={isShareModalOpen} onClose={() => !isSharing && setIsShareModalOpen(false)} title="Compartir Finanzas">
+        <div style={{ marginBottom: '16px', marginTop: '8px' }}>
+          <p className="text-body-sm" style={{ color: 'var(--color-on-surface-variant)' }}>
+            Escribe el correo electrónico de la persona con la que quieres compartir este módulo. 
+            <strong> Nota:</strong> Deben haber iniciado sesión en la app previamente.
+          </p>
+        </div>
+        <form onSubmit={handleShareFinance}>
+          <div style={{ marginBottom: '24px' }}>
+            <Input 
+              label="Correo Electrónico" 
+              placeholder="ejemplo@gmail.com" 
+              type="email"
+              value={shareEmail}
+              onChange={(e) => setShareEmail(e.target.value)}
+              autoFocus
+            />
+          </div>
+          <div style={{ display: 'flex', gap: '12px' }}>
+            <Button type="button" variant="ghost" fullWidth onClick={() => setIsShareModalOpen(false)} disabled={isSharing}>
+              Cancelar
+            </Button>
+            <Button type="submit" variant="primary" fullWidth disabled={!shareEmail.trim() || isSharing}>
+              {isSharing ? 'Buscando...' : 'Compartir'}
+            </Button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Category Management Modal */}
+      <Modal isOpen={isCategoriesModalOpen} onClose={() => setIsCategoriesModalOpen(false)} title="Tus Categorías">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', marginTop: '16px' }}>
+          <form onSubmit={handleAddCategory} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <div>
+              <Input 
+                label="Nueva Categoría" 
+                placeholder="Ej. Veterinaria" 
+                value={newCatName}
+                onChange={(e) => setNewCatName(e.target.value)}
+              />
+            </div>
+            <div>
+              <label className="text-label-md" style={{ color: 'var(--color-on-surface-variant)' }}>Tipo</label>
+              <select 
+                value={newCatType} 
+                onChange={(e) => setNewCatType(e.target.value as 'income' | 'expense')}
+                style={{
+                  width: '100%',
+                  padding: '12px 16px',
+                  borderRadius: 'var(--radius-md)',
+                  border: '1px solid var(--color-outline)',
+                  backgroundColor: 'var(--color-surface)',
+                  color: 'var(--color-on-surface)',
+                  fontSize: '16px',
+                  outline: 'none',
+                  fontFamily: 'inherit',
+                  marginTop: '4px'
+                }}
+              >
+                <option value="expense">Egreso</option>
+                <option value="income">Ingreso</option>
+              </select>
+            </div>
+            <Button type="submit" variant="primary" fullWidth disabled={!newCatName.trim() || isAddingCat} style={{ padding: '12px' }}>
+              {isAddingCat ? 'Agregando...' : 'Agregar Categoría'}
+            </Button>
+          </form>
+
+          <div>
+            <h4 className="text-label-lg" style={{ marginBottom: '8px', color: 'var(--color-on-surface-variant)' }}>Categorías Creadas</h4>
+            {customCategories.length === 0 ? (
+              <p className="text-body-sm" style={{ color: 'var(--color-on-surface-variant)' }}>No has creado ninguna categoría extra.</p>
+            ) : (
+              <ul style={{ display: 'flex', flexDirection: 'column', gap: '8px', listStyle: 'none', padding: 0 }}>
+                {customCategories.map(cat => (
+                  <li key={cat.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px', background: 'var(--color-surface-container-low)', borderRadius: 'var(--radius-sm)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span className="text-body-md" style={{ fontWeight: 500 }}>{cat.name}</span>
+                      <span className="text-label-sm" style={{ color: cat.type === 'income' ? '#10B981' : '#EF4444', background: cat.type === 'income' ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)', padding: '2px 6px', borderRadius: '4px' }}>
+                        {cat.type === 'income' ? 'Ingreso' : 'Egreso'}
+                      </span>
+                    </div>
+                    <button onClick={() => handleDeleteCategory(cat.id)} style={{ background: 'none', border: 'none', color: 'var(--color-error)', cursor: 'pointer', padding: '4px' }}>
+                      <Trash2 size={18} />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
       </Modal>
     </main>
   );

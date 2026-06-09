@@ -52,9 +52,11 @@
 }
 
 .balanceAmount {
-  font-size: 48px;
-  font-weight: 700;
+  font-size: 36px;
+  font-weight: 600;
+  letter-spacing: -0.5px;
   color: var(--color-on-surface);
+  transition: color 0.3s ease;
 }
 
 .balanceAmountPositive {
