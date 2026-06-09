@@ -111,12 +111,12 @@ export default function Listas() {
       <header className={styles.appBar}>
         <Link href="/">
           <Button variant="ghost" className={styles.iconBtn}>
-            <ArrowLeft size={24} />
+            <ArrowLeft size={26} />
           </Button>
         </Link>
         <h1 className="text-headline-md">Todas Tus Listas</h1>
         <Button variant="ghost" className={styles.iconBtn}>
-          <Search size={24} />
+          <Search size={26} />
         </Button>
       </header>
 

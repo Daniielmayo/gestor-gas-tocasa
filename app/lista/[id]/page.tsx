@@ -249,8 +249,8 @@ export default function SharedList({ params }: { params: Promise<{ id: string }>
       {/* App Bar */}
       <header className={styles.appBar}>
         <Link href="/">
-          <Button variant="ghost" className={styles.iconBtn}>
-            <ArrowLeft size={24} />
+          <Button variant="ghost" className={styles.iconBtn} onClick={() => router.push('/listas')}>
+            <ArrowLeft size={26} />
           </Button>
         </Link>
         <div className={styles.titleContainer} style={{ flex: 1, overflow: 'hidden' }}>

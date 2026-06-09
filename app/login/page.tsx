@@ -1,6 +1,7 @@
 'use client';
 import React, { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import Image from 'next/image';
 import { Avatar } from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
@@ -80,8 +81,9 @@ export default function Login() {
               Iniciar Sesión
             </h2>
             
-            <Button variant="primary" fullWidth size="lg" onClick={handleGoogleLogin}>
-              Continuar con Google
+            <Button variant="primary" fullWidth size="lg" onClick={handleGoogleLogin} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px', backgroundColor: '#FFFFFF', color: '#757575', border: '1px solid #DFE1E5', boxShadow: '0 1px 2px 0 rgba(60,64,67,0.30), 0 1px 3px 1px rgba(60,64,67,0.15)' }}>
+              <Image src="/google-icon-logo-svgrepo-com.svg" alt="Google" width={24} height={24} />
+              <span style={{ fontWeight: 500, fontFamily: 'Roboto, sans-serif' }}>Continuar con Google</span>
             </Button>
           </div>
         )}
