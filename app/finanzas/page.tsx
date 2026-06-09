@@ -268,6 +268,16 @@ export default function Finanzas() {
         sharedWith: arrayUnion(friendUid)
       }, { merge: true });
 
+      await addDoc(collection(db, 'notifications'), {
+        userId: friendUid,
+        title: 'Finanzas Compartidas',
+        message: `${profile.displayName || 'Alguien'} ha compartido su módulo de finanzas contigo.`,
+        type: 'finance',
+        link: '/finanzas',
+        read: false,
+        createdAt: Timestamp.now()
+      });
+
       alert(`¡Finanzas compartidas con éxito con ${friendName}!`);
       setIsShareModalOpen(false);
       setShareEmail('');
@@ -537,12 +547,14 @@ export default function Finanzas() {
                       <span className="text-label-sm" style={{ color: 'var(--color-on-surface-variant)' }}>
                         {progress.toFixed(0)}%
                       </span>
-                      <button 
-                        onClick={(e) => { e.stopPropagation(); setSavingToDelete(s); setIsDeleteSavingModalOpen(true); }}
-                        style={{ background: 'none', border: 'none', color: 'var(--color-on-surface-variant)', cursor: 'pointer', padding: '4px' }}
-                      >
-                        <Trash2 size={16} />
-                      </button>
+                      {s.ownerId === user?.uid && (
+                        <button 
+                          onClick={(e) => { e.stopPropagation(); setSavingToDelete(s); setIsDeleteSavingModalOpen(true); }}
+                          style={{ background: 'none', border: 'none', color: 'var(--color-on-surface-variant)', cursor: 'pointer', padding: '4px' }}
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      )}
                     </div>
                   </div>
                   <div className={styles.savingProgressBg}>
@@ -596,13 +608,15 @@ export default function Finanzas() {
                   <div className={`${styles.transactionAmount} ${t.type === 'income' ? styles.amountIncome : styles.amountExpense}`}>
                     {t.type === 'income' ? '+' : '-'}{formatCOP(t.amount)}
                   </div>
-                  <button 
-                    onClick={() => { setTxToDelete(t); setIsDeleteTxModalOpen(true); }}
-                    style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '4px', color: 'var(--color-on-surface-variant)' }}
-                    aria-label="Eliminar transacción"
-                  >
-                    <Trash2 size={18} />
-                  </button>
+                  {t.ownerId === user?.uid && (
+                    <button 
+                      onClick={() => { setTxToDelete(t); setIsDeleteTxModalOpen(true); }}
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '4px', color: 'var(--color-on-surface-variant)' }}
+                      aria-label="Eliminar transacción"
+                    >
+                      <Trash2 size={18} />
+                    </button>
+                  )}
                 </div>
               </div>
             ))}

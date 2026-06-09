@@ -13,7 +13,7 @@ import { ArrowLeft, Pencil, Trash2, Send, UserPlus } from 'lucide-react';
 import styles from './lista.module.css';
 import { useAuth } from '@/context/AuthContext';
 import { db } from '@/lib/firebase';
-import { doc, onSnapshot, collection, query, where, addDoc, serverTimestamp, updateDoc, deleteDoc, getDocs, arrayUnion } from 'firebase/firestore';
+import { doc, onSnapshot, collection, query, where, addDoc, serverTimestamp, updateDoc, deleteDoc, getDocs, arrayUnion, Timestamp } from 'firebase/firestore';
 
 interface ListItem {
   id: string;
@@ -220,6 +220,17 @@ export default function SharedList({ params }: { params: Promise<{ id: string }>
         sharedWith: arrayUnion(friendUid)
       });
 
+      // 3. Crear notificación
+      await addDoc(collection(db, 'notifications'), {
+        userId: friendUid,
+        title: 'Nueva Lista Compartida',
+        message: `${profile.displayName || 'Alguien'} ha compartido la lista '${listData.title}' contigo.`,
+        type: 'list',
+        link: `/lista/${listId}`,
+        read: false,
+        createdAt: Timestamp.now()
+      });
+
       import('@/lib/history').then(({ logActivity }) => {
         // Obtenemos los sharedWith actuales y añadimos al amigo para que también lo vea
         const newSharedWith = [...(listData.sharedWith || []), friendUid];
@@ -264,9 +275,11 @@ export default function SharedList({ params }: { params: Promise<{ id: string }>
           <Button variant="ghost" className={styles.iconBtn} onClick={openEditModal} aria-label="Editar nombre">
             <Pencil size={20} />
           </Button>
-          <Button variant="ghost" className={styles.iconBtn} onClick={() => setIsDeleteModalOpen(true)} aria-label="Eliminar lista">
-            <Trash2 size={20} color="var(--color-error)" />
-          </Button>
+          {listData?.ownerId === user?.uid && (
+            <Button variant="ghost" className={styles.iconBtn} onClick={() => setIsDeleteModalOpen(true)} aria-label="Eliminar lista">
+              <Trash2 size={20} color="var(--color-error)" />
+            </Button>
+          )}
         </div>
       </header>
 

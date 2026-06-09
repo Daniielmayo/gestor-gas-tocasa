@@ -12,6 +12,7 @@ import { Input } from '@/components/ui/Input';
 import { ListSummaryCard } from '@/components/ui/ListSummaryCard';
 import { UpcomingPaymentCard } from '@/components/ui/UpcomingPaymentCard';
 import { SpeedDial } from '@/components/ui/SpeedDial';
+import { NotificationBell } from '@/components/ui/NotificationBell';
 import { Plus, Bell, Settings, Receipt, CreditCard, ChevronRight, CheckCircle2, Calendar } from 'lucide-react';
 import styles from './dashboard.module.css';
 import { useAuth } from '@/context/AuthContext';
@@ -221,23 +222,7 @@ export default function Dashboard() {
           </p>
         </div>
         <div className={styles.headerActions}>
-          <Link href="/notificaciones" style={{ position: 'relative', display: 'inline-block' }}>
-            <Button variant="ghost" className={styles.iconBtn} style={{ position: 'relative' }}>
-              <Bell size={24} />
-              {upcomingPayments.some(p => p.daysUntil <= 3) && (
-                <span style={{
-                  position: 'absolute',
-                  top: '6px',
-                  right: '8px',
-                  width: '10px',
-                  height: '10px',
-                  backgroundColor: 'var(--color-error)',
-                  borderRadius: '50%',
-                  border: '2px solid var(--color-surface-container-lowest)'
-                }} />
-              )}
-            </Button>
-          </Link>
+          <NotificationBell />
           <div onClick={() => setIsProfileModalOpen(true)} style={{ cursor: 'pointer' }}>
             <Avatar initials={profile?.initials || 'US'} src={profile?.photoURL || undefined} size="sm" />
           </div>

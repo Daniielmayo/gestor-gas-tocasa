@@ -1,6 +1,6 @@
 .container {
   position: fixed;
-  bottom: 88px;
+  bottom: 104px;
   right: 24px;
   z-index: 60;
   display: flex;
@@ -10,7 +10,7 @@
 
 @supports (padding-bottom: env(safe-area-inset-bottom)) {
   .container {
-    bottom: calc(88px + env(safe-area-inset-bottom));
+    bottom: calc(104px + env(safe-area-inset-bottom));
   }
 }
 

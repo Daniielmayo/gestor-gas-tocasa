@@ -1,6 +1,6 @@
 .fab {
   position: fixed;
-  bottom: 88px; /* 64px (nav) + 24px */
+  bottom: 104px; /* 24px (bottom) + 64px (nav) + 16px */
   right: 24px;
   width: 56px;
   height: 56px;
@@ -26,7 +26,7 @@
 
 @supports (padding-bottom: env(safe-area-inset-bottom)) {
   .fab {
-    bottom: calc(88px + env(safe-area-inset-bottom));
+    bottom: calc(104px + env(safe-area-inset-bottom));
   }
 }
 

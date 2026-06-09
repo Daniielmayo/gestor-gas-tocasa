@@ -211,6 +211,16 @@ export default function RecurringPayments() {
         sharedWith: arrayUnion(friendUid)
       }, { merge: true });
 
+      await addDoc(collection(db, 'notifications'), {
+        userId: friendUid,
+        title: 'Pagos Programados',
+        message: `${profile.displayName || 'Alguien'} ha compartido sus pagos programados contigo.`,
+        type: 'payment',
+        link: '/pagos/recurrentes',
+        read: false,
+        createdAt: Timestamp.now()
+      });
+
       alert(`¡Módulo de pagos compartido con éxito con ${friendName}!`);
       setIsShareModalOpen(false);
       setShareEmail('');
@@ -461,9 +471,11 @@ export default function RecurringPayments() {
                       </div>
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                      <Button variant="ghost" onClick={() => openDeleteModal(payment)} aria-label="Eliminar" style={{ padding: '8px', height: 'auto', minWidth: 'auto' }}>
-                        <Trash2 size={20} color="var(--color-error)" />
-                      </Button>
+                      {payment.ownerId === user?.uid && (
+                        <Button variant="ghost" onClick={() => openDeleteModal(payment)} aria-label="Eliminar" style={{ padding: '8px', height: 'auto', minWidth: 'auto' }}>
+                          <Trash2 size={20} color="var(--color-error)" />
+                        </Button>
+                      )}
                     </div>
                   </Card>
                 ))}
