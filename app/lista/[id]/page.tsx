@@ -6,8 +6,9 @@ import { Card } from '@/components/ui/Card';
 import { Checkbox } from '@/components/ui/Checkbox';
 import { Button } from '@/components/ui/Button';
 import { Spinner } from '@/components/ui/Spinner';
-import { Modal } from '@/components/ui/Modal';
 import { Input } from '@/components/ui/Input';
+import { Modal } from '@/components/ui/Modal';
+import { UserEmailAutocomplete } from '@/components/ui/UserEmailAutocomplete';
 import { ArrowLeft, Pencil, Trash2, Send, UserPlus } from 'lucide-react';
 import styles from './lista.module.css';
 import { useAuth } from '@/context/AuthContext';
@@ -361,12 +362,9 @@ export default function SharedList({ params }: { params: Promise<{ id: string }>
         </div>
         <form onSubmit={handleShareList}>
           <div style={{ marginBottom: '24px' }}>
-            <Input 
-              label="Correo Electrónico" 
-              placeholder="ejemplo@gmail.com" 
-              type="email"
+            <UserEmailAutocomplete 
               value={shareEmail}
-              onChange={(e) => setShareEmail(e.target.value)}
+              onChange={(val: string) => setShareEmail(val)}
               autoFocus
             />
           </div>

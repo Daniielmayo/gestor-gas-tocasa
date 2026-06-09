@@ -19,7 +19,7 @@
   width: 90%;
   max-width: 400px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
-  overflow: hidden;
+  overflow: visible;
   animation: slideUp 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 

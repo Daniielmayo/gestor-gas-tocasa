@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/Button';
 import { Spinner } from '@/components/ui/Spinner';
 import { Modal } from '@/components/ui/Modal';
 import { Input } from '@/components/ui/Input';
+import { UserEmailAutocomplete } from '@/components/ui/UserEmailAutocomplete';
 import { SpeedDial } from '@/components/ui/SpeedDial';
 import { ArrowLeft, ArrowUpRight, ArrowDownRight, TrendingUp, TrendingDown, Wallet, ChevronLeft, ChevronRight, Settings, UserPlus, Trash2 } from 'lucide-react';
 import styles from './finanzas.module.css';
@@ -89,6 +90,8 @@ export default function Finanzas() {
   const [selectedSaving, setSelectedSaving] = useState<SavingGoal | null>(null);
   const [contributeType, setContributeType] = useState<'add' | 'withdraw'>('add');
   const [contributeAmount, setContributeAmount] = useState('');
+  const [isDeleteSavingModalOpen, setIsDeleteSavingModalOpen] = useState(false);
+  const [savingToDelete, setSavingToDelete] = useState<SavingGoal | null>(null);
 
   // Delete transaction state
   const [isDeleteTxModalOpen, setIsDeleteTxModalOpen] = useState(false);
@@ -316,6 +319,20 @@ export default function Finanzas() {
     }
   };
 
+  const handleDeleteSaving = async () => {
+    if (!savingToDelete) return;
+    setIsSubmitting(true);
+    try {
+      await deleteDoc(doc(db, 'savings', savingToDelete.id));
+      setIsDeleteSavingModalOpen(false);
+      setSavingToDelete(null);
+    } catch (error) {
+      console.error(error);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   const handleCreateSaving = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!savingTitle.trim() || !savingTarget || isSubmitting || !user) return;
@@ -516,9 +533,17 @@ export default function Finanzas() {
                       <Target size={20} color="var(--color-primary)" />
                       <span className="text-body-md" style={{ fontWeight: 600 }}>{s.title}</span>
                     </div>
-                    <span className="text-label-sm" style={{ color: 'var(--color-on-surface-variant)' }}>
-                      {progress.toFixed(0)}%
-                    </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span className="text-label-sm" style={{ color: 'var(--color-on-surface-variant)' }}>
+                        {progress.toFixed(0)}%
+                      </span>
+                      <button 
+                        onClick={(e) => { e.stopPropagation(); setSavingToDelete(s); setIsDeleteSavingModalOpen(true); }}
+                        style={{ background: 'none', border: 'none', color: 'var(--color-on-surface-variant)', cursor: 'pointer', padding: '4px' }}
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
                   </div>
                   <div className={styles.savingProgressBg}>
                     <div className={styles.savingProgressFill} style={{ width: `${progress}%` }} />
@@ -713,12 +738,9 @@ export default function Finanzas() {
         </div>
         <form onSubmit={handleShareFinance}>
           <div style={{ marginBottom: '24px' }}>
-            <Input 
-              label="Correo Electrónico" 
-              placeholder="ejemplo@gmail.com" 
-              type="email"
+            <UserEmailAutocomplete 
               value={shareEmail}
-              onChange={(e) => setShareEmail(e.target.value)}
+              onChange={(val) => setShareEmail(val)}
               autoFocus
             />
           </div>
@@ -746,6 +768,23 @@ export default function Finanzas() {
           </Button>
           <Button type="button" variant="danger" fullWidth onClick={handleDeleteTransaction} disabled={isDeletingTx}>
             {isDeletingTx ? 'Eliminando...' : 'Sí, eliminar'}
+          </Button>
+        </div>
+      </Modal>
+
+      {/* Delete Saving Modal */}
+      <Modal isOpen={isDeleteSavingModalOpen} onClose={() => !isSubmitting && setIsDeleteSavingModalOpen(false)} title="Eliminar Meta">
+        <div style={{ marginBottom: '24px', marginTop: '8px' }}>
+          <p className="text-body-md" style={{ color: 'var(--color-on-surface-variant)' }}>
+            ¿Estás seguro de que deseas eliminar la meta de ahorro <strong>{savingToDelete?.title}</strong>? El dinero seguirá en tu balance, simplemente se borrará esta meta.
+          </p>
+        </div>
+        <div style={{ display: 'flex', gap: '12px' }}>
+          <Button type="button" variant="ghost" fullWidth onClick={() => setIsDeleteSavingModalOpen(false)} disabled={isSubmitting}>
+            Cancelar
+          </Button>
+          <Button type="button" variant="danger" fullWidth onClick={handleDeleteSaving} disabled={isSubmitting}>
+            {isSubmitting ? 'Eliminando...' : 'Sí, eliminar'}
           </Button>
         </div>
       </Modal>

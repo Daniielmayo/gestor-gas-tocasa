@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { Spinner } from '@/components/ui/Spinner';
 import { Modal } from '@/components/ui/Modal';
+import { UserEmailAutocomplete } from '@/components/ui/UserEmailAutocomplete';
 import { ArrowLeft, Calendar, Settings, UserPlus, Trash2, Lock, Users } from 'lucide-react';
 import styles from './recurrentes.module.css';
 import { useAuth } from '@/context/AuthContext';
@@ -481,12 +482,9 @@ export default function RecurringPayments() {
         </div>
         <form onSubmit={handleSharePayment}>
           <div style={{ marginBottom: '24px' }}>
-            <Input 
-              label="Correo Electrónico" 
-              placeholder="ejemplo@gmail.com" 
-              type="email"
+            <UserEmailAutocomplete 
               value={shareEmail}
-              onChange={(e) => setShareEmail(e.target.value)}
+              onChange={(val) => setShareEmail(val)}
               autoFocus
             />
           </div>
