@@ -64,6 +64,7 @@ export default function Finanzas() {
   const [description, setDescription] = useState('');
   const [transactionDate, setTransactionDate] = useState(() => new Date().toISOString().split('T')[0]);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [editingTxId, setEditingTxId] = useState<string | null>(null);
 
   // Sharing state
   const [financeSettings, setFinanceSettings] = useState<any>(null);
@@ -233,19 +234,32 @@ export default function Finanzas() {
       
       const selectedPay = recurringPayments.find(p => p.id === selectedRecurringPaymentId);
       
-      await addDoc(collection(db, 'transactions'), {
-        type: transactionType,
-        amount: parseCOP(amount),
-        category: finalCategory,
-        description,
-        ownerId: user.uid,
-        ownerName: profile?.displayName?.split(' ')[0] || 'Usuario',
-        sharedWith: currentSharedWith,
-        createdAt: Timestamp.fromDate(dateObj),
-        recurringPaymentId: selectedPay ? selectedPay.id : null,
-        recurringPaymentTitle: selectedPay ? selectedPay.title : null
-      });
+      if (editingTxId) {
+        await updateDoc(doc(db, 'transactions', editingTxId), {
+          type: transactionType,
+          amount: parseCOP(amount),
+          category: finalCategory,
+          description,
+          createdAt: Timestamp.fromDate(dateObj),
+          recurringPaymentId: selectedPay ? selectedPay.id : null,
+          recurringPaymentTitle: selectedPay ? selectedPay.title : null
+        });
+      } else {
+        await addDoc(collection(db, 'transactions'), {
+          type: transactionType,
+          amount: parseCOP(amount),
+          category: finalCategory,
+          description,
+          ownerId: user.uid,
+          ownerName: profile?.displayName?.split(' ')[0] || 'Usuario',
+          sharedWith: currentSharedWith,
+          createdAt: Timestamp.fromDate(dateObj),
+          recurringPaymentId: selectedPay ? selectedPay.id : null,
+          recurringPaymentTitle: selectedPay ? selectedPay.title : null
+        });
+      }
       setIsModalOpen(false);
+      setEditingTxId(null);
       setAmount('');
       setCategory('');
       setCustomCategory('');
@@ -261,12 +275,39 @@ export default function Finanzas() {
   };
 
   const openModal = (type: 'income' | 'expense') => {
+    setEditingTxId(null);
     setTransactionType(type);
+    setAmount('');
     setCategory('');
     setCustomCategory('');
+    setDescription('');
     setSelectedRecurringPaymentId('');
     setCreateShareEmail('');
     setTransactionDate(new Date().toISOString().split('T')[0]);
+    setIsModalOpen(true);
+  };
+
+  const openEditTxModal = (t: Transaction) => {
+    setEditingTxId(t.id);
+    setTransactionType(t.type);
+    setAmount(formatInputCOP(String(t.amount)));
+    
+    const allCats = t.type === 'income' ? incomeCats : expenseCats;
+    if (allCats.includes(t.category)) {
+      setCategory(t.category);
+      setCustomCategory('');
+    } else {
+      setCategory('Otro');
+      setCustomCategory(t.category);
+    }
+    
+    setDescription(t.description || '');
+    if (t.createdAt) {
+      setTransactionDate(new Date(t.createdAt.toDate()).toISOString().split('T')[0]);
+    } else {
+      setTransactionDate(new Date().toISOString().split('T')[0]);
+    }
+    setSelectedRecurringPaymentId(t.recurringPaymentId || '');
     setIsModalOpen(true);
   };
 
@@ -678,13 +719,22 @@ export default function Finanzas() {
                     {t.type === 'income' ? '+' : '-'}{formatCOP(t.amount)}
                   </div>
                   {t.ownerId === user?.uid && (
-                    <button 
-                      onClick={() => { setTxToDelete(t); setIsDeleteTxModalOpen(true); }}
-                      style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '4px', color: 'var(--color-on-surface-variant)' }}
-                      aria-label="Eliminar transacción"
-                    >
-                      <Trash2 size={18} />
-                    </button>
+                    <div style={{ display: 'flex', gap: '4px' }}>
+                      <button 
+                        onClick={() => openEditTxModal(t)}
+                        style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '4px', color: 'var(--color-on-surface-variant)' }}
+                        aria-label="Editar transacción"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path></svg>
+                      </button>
+                      <button 
+                        onClick={() => { setTxToDelete(t); setIsDeleteTxModalOpen(true); }}
+                        style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '4px', color: 'var(--color-on-surface-variant)' }}
+                        aria-label="Eliminar transacción"
+                      >
+                        <Trash2 size={18} color="var(--color-error)" />
+                      </button>
+                    </div>
                   )}
                 </div>
               </div>
@@ -708,7 +758,7 @@ export default function Finanzas() {
         }
       ]} />
 
-      <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={`Nuevo ${transactionType === 'income' ? 'Ingreso' : 'Egreso'}`}>
+      <Modal isOpen={isModalOpen} onClose={() => { setIsModalOpen(false); setEditingTxId(null); }} title={`${editingTxId ? 'Editar' : 'Nuevo'} ${transactionType === 'income' ? 'Ingreso' : 'Egreso'}`}>
         <form onSubmit={handleAddTransaction} style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginTop: '16px' }}>
           <Input 
             label="Monto" 

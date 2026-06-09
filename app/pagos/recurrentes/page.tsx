@@ -26,6 +26,7 @@ interface Payment {
   ownerId: string;
   sharedWith?: string[];
   category?: string;
+  description?: string;
 }
 
 const PAYMENT_CATEGORIES = [
@@ -48,6 +49,7 @@ export default function RecurringPayments() {
   const [title, setTitle] = useState('');
   const [amount, setAmount] = useState('');
   const [category, setCategory] = useState(PAYMENT_CATEGORIES[0]);
+  const [description, setDescription] = useState('');
   const [payments, setPayments] = useState<Payment[]>([]);
   
   // Filter state
@@ -65,6 +67,7 @@ export default function RecurringPayments() {
   const [editTitle, setEditTitle] = useState('');
   const [editAmount, setEditAmount] = useState('');
   const [editCategory, setEditCategory] = useState(PAYMENT_CATEGORIES[0]);
+  const [editDescription, setEditDescription] = useState('');
   const [editSelectedDays, setEditSelectedDays] = useState<number[]>([]);
   const [editIsShared, setEditIsShared] = useState(true);
   const [editShareEmail, setEditShareEmail] = useState('');
@@ -195,6 +198,7 @@ export default function RecurringPayments() {
         ownerId: user.uid,
         sharedWith: isShared && currentSharedWith ? currentSharedWith : [],
         category: category,
+        description: description.trim(),
         createdAt: serverTimestamp()
       };
 
@@ -208,6 +212,7 @@ export default function RecurringPayments() {
       setAmount('');
       setSelectedDays([]);
       setCategory(PAYMENT_CATEGORIES[0]);
+      setDescription('');
       setIsShared(true);
       setCreateShareEmail('');
     } catch (error) {
@@ -230,6 +235,7 @@ export default function RecurringPayments() {
     setEditTitle(payment.title);
     setEditAmount(formatCOP(Number(payment.amount)));
     setEditCategory(payment.category || PAYMENT_CATEGORIES[0]);
+    setEditDescription(payment.description || '');
     setEditSelectedDays(payment.days || []);
     setEditIsShared(payment.sharedWith && payment.sharedWith.length > 0 ? true : false);
     setEditShareEmail('');
@@ -289,6 +295,7 @@ export default function RecurringPayments() {
         amount: parseCOP(editAmount),
         days: editSelectedDays.sort((a,b) => a - b),
         category: editCategory,
+        description: editDescription.trim(),
         sharedWith: editIsShared && uniqueSharedWith ? uniqueSharedWith : [],
       };
 
@@ -456,6 +463,13 @@ export default function RecurringPayments() {
               ))}
             </select>
           </div>
+
+          <Input 
+            label="Comentario (Opcional)" 
+            placeholder="Ej. Transferir a la cuenta de ahorros..." 
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+          />
           
           <div className={styles.frequencyGroup}>
             <label className="text-label-md" style={{ color: 'var(--color-on-surface)' }}>
@@ -613,6 +627,11 @@ export default function RecurringPayments() {
                       <p className="text-label-sm" style={{ color: 'var(--color-warning)' }}>
                         Se cobra los días: {payment.days.sort((a,b) => a - b).join(', ')} de cada mes
                       </p>
+                      {payment.description && (
+                        <p className="text-body-sm" style={{ color: 'var(--color-on-surface-variant)', marginTop: '4px' }}>
+                          {payment.description}
+                        </p>
+                      )}
                       <div style={{ marginTop: '4px' }}>
                         <span className="text-headline-sm" style={{ color: paidPaymentIds.has(payment.id) ? 'var(--color-success)' : 'inherit' }}>
                           {formatCOP(Number(payment.amount))}
@@ -727,6 +746,15 @@ export default function RecurringPayments() {
                 <option key={cat} value={cat}>{cat}</option>
               ))}
             </select>
+          </div>
+
+          <div style={{ marginBottom: '16px' }}>
+            <Input 
+              label="Comentario (Opcional)" 
+              placeholder="Ej. Transferir a la cuenta de ahorros..." 
+              value={editDescription}
+              onChange={(e) => setEditDescription(e.target.value)}
+            />
           </div>
           
           <div className={styles.frequencyGroup} style={{ marginBottom: '16px' }}>
