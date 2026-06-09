@@ -15,6 +15,8 @@ import { db } from '@/lib/firebase';
 import { collection, query, where, onSnapshot, addDoc, Timestamp, or, doc, setDoc, arrayUnion, getDocs, deleteDoc, updateDoc, increment } from 'firebase/firestore';
 import { formatCOP, formatInputCOP, parseCOP } from '@/lib/currency';
 import { PiggyBank, Plus, Target } from 'lucide-react';
+import { useUsersMap } from '@/lib/hooks/useUsersMap';
+import { AvatarGroup } from '@/components/ui/AvatarGroup';
 
 interface Transaction {
   id: string;
@@ -47,6 +49,7 @@ interface SavingGoal {
 export default function Finanzas() {
   const { user, profile, loading } = useAuth();
   const router = useRouter();
+  const { usersMap } = useUsersMap();
 
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [isReady, setIsReady] = useState(false);
@@ -65,6 +68,7 @@ export default function Finanzas() {
   const [financeSettings, setFinanceSettings] = useState<any>(null);
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [shareEmail, setShareEmail] = useState('');
+  const [createShareEmail, setCreateShareEmail] = useState('');
   const [isSharing, setIsSharing] = useState(false);
 
   // Filter state
@@ -197,6 +201,32 @@ export default function Finanzas() {
 
     setIsSubmitting(true);
     try {
+      let currentSharedWith = financeSettings?.sharedWith || [];
+      if (createShareEmail.trim()) {
+        const usersRef = collection(db, 'users');
+        const q = query(usersRef, where('email', '==', createShareEmail.trim().toLowerCase()));
+        const snap = await getDocs(q);
+        if (!snap.empty) {
+          const friendUid = snap.docs[0].data().uid;
+          if (friendUid !== user.uid) {
+            const settingsRef = doc(db, 'financeSettings', user.uid);
+            await setDoc(settingsRef, { sharedWith: arrayUnion(friendUid) }, { merge: true });
+            currentSharedWith = [...new Set([...currentSharedWith, friendUid])];
+            if (!(financeSettings?.sharedWith || []).includes(friendUid)) {
+              await addDoc(collection(db, 'notifications'), {
+                userId: friendUid,
+                title: 'Finanzas Compartidas',
+                message: `${profile?.displayName || 'Alguien'} ha compartido sus finanzas contigo al crear un movimiento.`,
+                type: 'finance',
+                link: '/finanzas',
+                read: false,
+                createdAt: Timestamp.now()
+              });
+            }
+          }
+        }
+      }
+
       // Parse local date (adding time to avoid UTC previous day shift)
       const dateObj = new Date(`${transactionDate}T12:00:00`);
       
@@ -209,7 +239,7 @@ export default function Finanzas() {
         description,
         ownerId: user.uid,
         ownerName: profile?.displayName?.split(' ')[0] || 'Usuario',
-        sharedWith: financeSettings?.sharedWith || [],
+        sharedWith: currentSharedWith,
         createdAt: Timestamp.fromDate(dateObj),
         recurringPaymentId: selectedPay ? selectedPay.id : null,
         recurringPaymentTitle: selectedPay ? selectedPay.title : null
@@ -220,6 +250,7 @@ export default function Finanzas() {
       setCustomCategory('');
       setDescription('');
       setSelectedRecurringPaymentId('');
+      setCreateShareEmail('');
       setTransactionDate(new Date().toISOString().split('T')[0]);
     } catch (error) {
       console.error('Error adding transaction: ', error);
@@ -233,6 +264,7 @@ export default function Finanzas() {
     setCategory('');
     setCustomCategory('');
     setSelectedRecurringPaymentId('');
+    setCreateShareEmail('');
     setTransactionDate(new Date().toISOString().split('T')[0]);
     setIsModalOpen(true);
   };
@@ -348,17 +380,44 @@ export default function Finanzas() {
     if (!savingTitle.trim() || !savingTarget || isSubmitting || !user) return;
     setIsSubmitting(true);
     try {
+      let currentSharedWith = financeSettings?.sharedWith || [];
+      if (createShareEmail.trim()) {
+        const usersRef = collection(db, 'users');
+        const q = query(usersRef, where('email', '==', createShareEmail.trim().toLowerCase()));
+        const snap = await getDocs(q);
+        if (!snap.empty) {
+          const friendUid = snap.docs[0].data().uid;
+          if (friendUid !== user.uid) {
+            const settingsRef = doc(db, 'financeSettings', user.uid);
+            await setDoc(settingsRef, { sharedWith: arrayUnion(friendUid) }, { merge: true });
+            currentSharedWith = [...new Set([...currentSharedWith, friendUid])];
+            if (!(financeSettings?.sharedWith || []).includes(friendUid)) {
+              await addDoc(collection(db, 'notifications'), {
+                userId: friendUid,
+                title: 'Finanzas Compartidas',
+                message: `${profile?.displayName || 'Alguien'} ha compartido sus finanzas contigo al crear una meta de ahorro.`,
+                type: 'finance',
+                link: '/finanzas',
+                read: false,
+                createdAt: Timestamp.now()
+              });
+            }
+          }
+        }
+      }
+
       await addDoc(collection(db, 'savings'), {
         title: savingTitle.trim(),
         targetAmount: parseCOP(savingTarget),
         currentAmount: 0,
         ownerId: user.uid,
-        sharedWith: financeSettings?.sharedWith || [],
+        sharedWith: currentSharedWith,
         createdAt: Timestamp.now()
       });
       setIsNewSavingModalOpen(false);
       setSavingTitle('');
       setSavingTarget('');
+      setCreateShareEmail('');
     } catch (error) {
       console.error(error);
     } finally {
@@ -458,8 +517,17 @@ export default function Finanzas() {
             <ArrowLeft size={24} />
           </Button>
         </Link>
-        <div className={styles.titleContainer} style={{ flex: 1, overflow: 'hidden', marginLeft: '16px' }}>
+        <div className={styles.titleContainer} style={{ flex: 1, overflow: 'hidden', marginLeft: '16px', display: 'flex', alignItems: 'center', gap: '12px' }}>
           <h1 className="text-headline-md">Finanzas</h1>
+          {(financeSettings?.sharedWith && financeSettings.sharedWith.length > 0) && (
+            <AvatarGroup 
+              users={[
+                usersMap[user?.uid || ''],
+                ...financeSettings.sharedWith.map((uid: string) => usersMap[uid])
+              ].filter(Boolean) as any} 
+              size="sm" 
+            />
+          )}
         </div>
         <div style={{ display: 'flex', gap: '4px' }}>
           <Button variant="ghost" className={styles.iconBtn} onClick={() => setIsShareModalOpen(true)}>
@@ -886,6 +954,12 @@ export default function Finanzas() {
             onChange={(e) => setSavingTarget(formatInputCOP(e.target.value))}
             required
           />
+          <div style={{ marginTop: '16px' }}>
+            <UserEmailAutocomplete value={createShareEmail} onChange={setCreateShareEmail} />
+            <p className="text-label-sm" style={{ color: 'var(--color-on-surface-variant)', marginTop: '8px' }}>
+              Opcional: Comparte tu módulo de finanzas.
+            </p>
+          </div>
           <Button type="submit" variant="primary" fullWidth disabled={!savingTitle || !savingTarget || isSubmitting}>
             {isSubmitting ? 'Guardando...' : 'Crear Meta'}
           </Button>

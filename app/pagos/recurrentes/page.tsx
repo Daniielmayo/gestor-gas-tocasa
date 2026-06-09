@@ -8,6 +8,8 @@ import { Button } from '@/components/ui/Button';
 import { Spinner } from '@/components/ui/Spinner';
 import { Modal } from '@/components/ui/Modal';
 import { UserEmailAutocomplete } from '@/components/ui/UserEmailAutocomplete';
+import { useUsersMap } from '@/lib/hooks/useUsersMap';
+import { AvatarGroup } from '@/components/ui/AvatarGroup';
 import { ArrowLeft, Calendar, Settings, UserPlus, Trash2, Lock, Users } from 'lucide-react';
 import styles from './recurrentes.module.css';
 import { useAuth } from '@/context/AuthContext';
@@ -39,6 +41,7 @@ const PAYMENT_CATEGORIES = [
 export default function RecurringPayments() {
   const { user, profile, loading } = useAuth();
   const router = useRouter();
+  const { usersMap } = useUsersMap();
 
   const [selectedDays, setSelectedDays] = useState<number[]>([]);
   const [title, setTitle] = useState('');
@@ -58,6 +61,7 @@ export default function RecurringPayments() {
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [shareEmail, setShareEmail] = useState('');
+  const [createShareEmail, setCreateShareEmail] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [paymentsSettings, setPaymentsSettings] = useState<any>(null);
   const [paidPaymentIds, setPaidPaymentIds] = useState<Set<string>>(new Set());
@@ -144,12 +148,38 @@ export default function RecurringPayments() {
     }
 
     try {
+      let currentSharedWith = paymentsSettings?.sharedWith || [];
+      if (createShareEmail.trim()) {
+        const usersRef = collection(db, 'users');
+        const q = query(usersRef, where('email', '==', createShareEmail.trim().toLowerCase()));
+        const snap = await getDocs(q);
+        if (!snap.empty) {
+          const friendUid = snap.docs[0].data().uid;
+          if (friendUid !== user.uid) {
+            const settingsRef = doc(db, 'paymentsSettings', user.uid);
+            await setDoc(settingsRef, { sharedWith: arrayUnion(friendUid) }, { merge: true });
+            currentSharedWith = [...new Set([...currentSharedWith, friendUid])];
+            if (!(paymentsSettings?.sharedWith || []).includes(friendUid)) {
+              await addDoc(collection(db, 'notifications'), {
+                userId: friendUid,
+                title: 'Pagos Compartidos',
+                message: `${profile?.displayName || 'Alguien'} ha compartido sus pagos contigo al crear un pago recurrente.`,
+                type: 'payment',
+                link: '/pagos/recurrentes',
+                read: false,
+                createdAt: Timestamp.now()
+              });
+            }
+          }
+        }
+      }
+
       const paymentData = {
         title: title.trim(),
         amount: parseCOP(amount),
         days: selectedDays.sort((a,b) => a - b),
         ownerId: user.uid,
-        sharedWith: isShared && paymentsSettings?.sharedWith ? paymentsSettings.sharedWith : [],
+        sharedWith: isShared && currentSharedWith ? currentSharedWith : [],
         category: category,
         createdAt: serverTimestamp()
       };
@@ -165,6 +195,7 @@ export default function RecurringPayments() {
       setSelectedDays([]);
       setCategory(PAYMENT_CATEGORIES[0]);
       setIsShared(true);
+      setCreateShareEmail('');
     } catch (error) {
       console.error("Error al guardar pago:", error);
     }
@@ -264,13 +295,24 @@ export default function RecurringPayments() {
   return (
     <main className={`container ${styles.main}`}>
       <header className={styles.appBar}>
-        <Link href="/">
-          <Button variant="ghost" className={styles.iconBtn}>
-            <ArrowLeft size={24} />
-          </Button>
-        </Link>
-        <div className={styles.titleContainer} style={{ flex: 1, overflow: 'hidden', marginLeft: '16px' }}>
-          <h1 className="text-headline-md">Pagos</h1>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+          <Link href="/">
+            <Button variant="ghost" className={styles.iconBtn}>
+              <ArrowLeft size={24} />
+            </Button>
+          </Link>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <h1 className="text-headline-sm">Pagos Programados</h1>
+            {(paymentsSettings?.sharedWith && paymentsSettings.sharedWith.length > 0) && (
+              <AvatarGroup 
+                users={[
+                  usersMap[user?.uid || ''],
+                  ...paymentsSettings.sharedWith.map((uid: string) => usersMap[uid])
+                ].filter(Boolean) as any} 
+                size="sm" 
+              />
+            )}
+          </div>
         </div>
         <div style={{ display: 'flex', gap: '4px' }}>
           <Button variant="ghost" className={styles.iconBtn} onClick={openShareModal}>
@@ -348,15 +390,24 @@ export default function RecurringPayments() {
                 id="sharePayment" 
                 checked={isShared} 
                 onChange={(e) => setIsShared(e.target.checked)} 
-                style={{ width: '18px', height: '18px', accentColor: 'var(--color-primary)' }}
+                style={{ width: '18px', height: '18px' }}
               />
               <label htmlFor="sharePayment" className="text-body-md" style={{ color: 'var(--color-on-surface)' }}>
-                Compartir pago con el hogar
+                Compartir este pago con mis colaboradores
               </label>
             </div>
           )}
 
-          <Button type="submit" fullWidth className={styles.saveBtn}>Guardar Pago</Button>
+          <div style={{ marginTop: '8px' }}>
+            <UserEmailAutocomplete value={createShareEmail} onChange={setCreateShareEmail} />
+            <p className="text-label-sm" style={{ color: 'var(--color-on-surface-variant)', marginTop: '8px' }}>
+              Opcional: Comparte tu módulo de pagos.
+            </p>
+          </div>
+
+          <Button type="submit" variant="primary" style={{ marginTop: '8px' }}>
+            Guardar Pago Programado
+          </Button>
         </form>
       </Card>
 

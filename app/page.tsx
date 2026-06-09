@@ -13,11 +13,12 @@ import { ListSummaryCard } from '@/components/ui/ListSummaryCard';
 import { UpcomingPaymentCard } from '@/components/ui/UpcomingPaymentCard';
 import { SpeedDial } from '@/components/ui/SpeedDial';
 import { NotificationBell } from '@/components/ui/NotificationBell';
-import { Plus, Bell, Settings, Receipt, CreditCard, ChevronRight, CheckCircle2, Calendar } from 'lucide-react';
+import { UserEmailAutocomplete } from '@/components/ui/UserEmailAutocomplete';
+import { Plus, Bell, Settings, Receipt, CreditCard, ChevronRight, CheckCircle2, Calendar, LogOut } from 'lucide-react';
 import styles from './dashboard.module.css';
 import { useAuth } from '@/context/AuthContext';
 import { db } from '@/lib/firebase';
-import { collection, query, where, onSnapshot, addDoc, serverTimestamp, or } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, addDoc, serverTimestamp, or, getDocs, Timestamp } from 'firebase/firestore';
 import { formatCOP } from '@/lib/currency';
 
 interface SharedList {
@@ -52,6 +53,7 @@ export default function Dashboard() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [newListName, setNewListName] = useState('');
+  const [shareEmail, setShareEmail] = useState('');
   const [isCreatingList, setIsCreatingList] = useState(false);
 
   const actions = [
@@ -174,18 +176,48 @@ export default function Dashboard() {
     setIsCreatingList(true);
 
     try {
+      let sharedWithUids: string[] = [];
+      
+      if (shareEmail.trim()) {
+        const usersRef = collection(db, 'users');
+        const q = query(usersRef, where('email', '==', shareEmail.trim().toLowerCase()));
+        const snap = await getDocs(q);
+        if (!snap.empty) {
+          const friendUid = snap.docs[0].data().uid;
+          if (friendUid !== user.uid) {
+            sharedWithUids = [friendUid];
+          }
+        } else {
+          alert("El correo a compartir no está registrado. La lista se creará sin compartir.");
+        }
+      }
+
       const docRef = await addDoc(collection(db, 'lists'), {
         title: newListName.trim(),
         ownerId: user.uid,
-        sharedWith: [],
+        sharedWith: sharedWithUids,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
       });
+
+      if (sharedWithUids.length > 0) {
+        await addDoc(collection(db, 'notifications'), {
+          userId: sharedWithUids[0],
+          title: 'Nueva Lista Compartida',
+          message: `${profile.displayName || 'Alguien'} ha compartido la lista '${newListName.trim()}' contigo desde el inicio.`,
+          type: 'list',
+          link: `/lista/${docRef.id}`,
+          read: false,
+          createdAt: Timestamp.now()
+        });
+      }
 
       import('@/lib/history').then(({ logActivity }) => {
         logActivity(`<strong>${profile.displayName}</strong> creó la lista compartida '${newListName.trim()}'`, user.uid, []);
       });
 
+      setNewListName('');
+      setShareEmail('');
       setIsModalOpen(false);
       router.push(`/lista/${docRef.id}`);
     } catch (error: any) {
@@ -360,6 +392,12 @@ export default function Dashboard() {
               onChange={(e) => setNewListName(e.target.value)}
               autoFocus
             />
+          </div>
+          <div style={{ marginBottom: '24px' }}>
+            <UserEmailAutocomplete value={shareEmail} onChange={setShareEmail} />
+            <p className="text-label-sm" style={{ color: 'var(--color-on-surface-variant)', marginTop: '8px' }}>
+              Opcional: Comparte esta lista inmediatamente.
+            </p>
           </div>
           <div style={{ display: 'flex', gap: '12px' }}>
             <Button type="button" variant="ghost" fullWidth onClick={() => setIsModalOpen(false)} disabled={isCreatingList}>

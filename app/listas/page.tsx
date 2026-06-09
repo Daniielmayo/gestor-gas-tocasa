@@ -13,7 +13,8 @@ import { ArrowLeft, Plus, Search } from 'lucide-react';
 import styles from './listas.module.css';
 import { useAuth } from '@/context/AuthContext';
 import { db } from '@/lib/firebase';
-import { collection, query, where, onSnapshot, addDoc, serverTimestamp, or } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, addDoc, serverTimestamp, or, getDocs, Timestamp } from 'firebase/firestore';
+import { UserEmailAutocomplete } from '@/components/ui/UserEmailAutocomplete';
 
 interface SharedList {
   id: string;
@@ -30,6 +31,7 @@ export default function Listas() {
   
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [newListName, setNewListName] = useState('');
+  const [shareEmail, setShareEmail] = useState('');
   const [isCreatingList, setIsCreatingList] = useState(false);
 
   useEffect(() => {
@@ -77,18 +79,51 @@ export default function Listas() {
     setIsCreatingList(true);
 
     try {
+      let sharedWithUids: string[] = [];
+      let friendName = '';
+      
+      if (shareEmail.trim()) {
+        const usersRef = collection(db, 'users');
+        const q = query(usersRef, where('email', '==', shareEmail.trim().toLowerCase()));
+        const snap = await getDocs(q);
+        if (!snap.empty) {
+          const friendDoc = snap.docs[0];
+          const friendUid = friendDoc.data().uid;
+          if (friendUid !== user.uid) {
+            sharedWithUids = [friendUid];
+            friendName = friendDoc.data().displayName || shareEmail;
+          }
+        } else {
+          alert("El correo a compartir no está registrado. La lista se creará sin compartir.");
+        }
+      }
+
       const docRef = await addDoc(collection(db, 'lists'), {
         title: newListName.trim(),
         ownerId: user.uid,
-        sharedWith: [],
+        sharedWith: sharedWithUids,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
       });
+
+      if (sharedWithUids.length > 0) {
+        await addDoc(collection(db, 'notifications'), {
+          userId: sharedWithUids[0],
+          title: 'Nueva Lista Compartida',
+          message: `${profile.displayName || 'Alguien'} ha compartido la lista '${newListName.trim()}' contigo al crearla.`,
+          type: 'list',
+          link: `/lista/${docRef.id}`,
+          read: false,
+          createdAt: Timestamp.now()
+        });
+      }
       
       import('@/lib/history').then(({ logActivity }) => {
         logActivity(`<strong>${profile.displayName}</strong> creó la lista compartida '${newListName.trim()}'`, user.uid, []);
       });
 
+      setNewListName('');
+      setShareEmail('');
       setIsModalOpen(false);
       router.push(`/lista/${docRef.id}`);
     } catch (error: any) {
@@ -162,6 +197,15 @@ export default function Listas() {
               onChange={(e) => setNewListName(e.target.value)}
               autoFocus
             />
+          </div>
+          <div style={{ marginBottom: '24px' }}>
+            <UserEmailAutocomplete 
+              value={shareEmail} 
+              onChange={setShareEmail} 
+            />
+            <p className="text-label-sm" style={{ color: 'var(--color-on-surface-variant)', marginTop: '8px' }}>
+              Opcional: Comparte esta lista inmediatamente.
+            </p>
           </div>
           <div style={{ display: 'flex', gap: '12px' }}>
             <Button type="button" variant="ghost" fullWidth onClick={() => setIsModalOpen(false)} disabled={isCreatingList}>

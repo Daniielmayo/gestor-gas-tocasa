@@ -9,7 +9,9 @@ import { Spinner } from '@/components/ui/Spinner';
 import { Input } from '@/components/ui/Input';
 import { Modal } from '@/components/ui/Modal';
 import { UserEmailAutocomplete } from '@/components/ui/UserEmailAutocomplete';
-import { ArrowLeft, Pencil, Trash2, Send, UserPlus } from 'lucide-react';
+import { useUsersMap } from '@/lib/hooks/useUsersMap';
+import { AvatarGroup } from '@/components/ui/AvatarGroup';
+import { Trash2, Plus, ArrowLeft, MoreVertical, Pencil, UserPlus, CheckCircle2, Send } from 'lucide-react';
 import styles from './lista.module.css';
 import { useAuth } from '@/context/AuthContext';
 import { db } from '@/lib/firebase';
@@ -29,6 +31,7 @@ export default function SharedList({ params }: { params: Promise<{ id: string }>
   const listId = resolvedParams.id;
   const { user, profile, loading } = useAuth();
   const router = useRouter();
+  const { usersMap } = useUsersMap();
 
   const [listTitle, setListTitle] = useState('Cargando...');
   const [items, setItems] = useState<ListItem[]>([]);
@@ -265,8 +268,17 @@ export default function SharedList({ params }: { params: Promise<{ id: string }>
             <ArrowLeft size={26} />
           </Button>
         </Link>
-        <div className={styles.titleContainer} style={{ flex: 1, overflow: 'hidden' }}>
+        <div className={styles.titleContainer} style={{ flex: 1, overflow: 'hidden', display: 'flex', alignItems: 'center', gap: '12px' }}>
           <h1 className="text-headline-md capitalize" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{listTitle}</h1>
+          {(listData?.sharedWith && listData.sharedWith.length > 0) && (
+            <AvatarGroup 
+              users={[
+                usersMap[listData.ownerId || ''],
+                ...listData.sharedWith.map((uid: string) => usersMap[uid])
+              ].filter(Boolean) as any} 
+              size="sm" 
+            />
+          )}
         </div>
         <div style={{ display: 'flex', gap: '4px' }}>
           <Button variant="ghost" className={styles.iconBtn} onClick={() => setIsShareModalOpen(true)} aria-label="Compartir lista">

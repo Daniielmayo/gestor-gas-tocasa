@@ -3,13 +3,16 @@ import { Card } from './Card';
 import { collection, query, where, onSnapshot } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { ChevronRight } from 'lucide-react';
+import { AvatarGroup } from './AvatarGroup';
+import { useUsersMap } from '@/lib/hooks/useUsersMap';
 
 interface ListSummaryCardProps {
-  list: { id: string; title: string };
+  list: { id: string; title: string; sharedWith?: string[]; ownerId?: string };
   styles: any;
 }
 
 export function ListSummaryCard({ list, styles }: ListSummaryCardProps) {
+  const { usersMap } = useUsersMap();
   const [total, setTotal] = useState(0);
   const [completed, setCompleted] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -57,7 +60,16 @@ export function ListSummaryCard({ list, styles }: ListSummaryCardProps) {
           </div>
         )}
       </div>
-      <div className={styles.listAvatars} style={{ marginLeft: '16px' }}>
+      <div className={styles.listAvatars} style={{ marginLeft: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+        {(list.sharedWith && list.sharedWith.length > 0) && (
+          <AvatarGroup 
+            users={[
+              (list.ownerId ? usersMap[list.ownerId] : null),
+              ...list.sharedWith.map((uid: string) => usersMap[uid])
+            ].filter(Boolean) as any} 
+            size="sm" 
+          />
+        )}
         <ChevronRight size={20} color="var(--color-outline)" />
       </div>
     </Card>

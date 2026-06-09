@@ -2,12 +2,15 @@ import React from 'react';
 import { Card } from './Card';
 import { Button } from './Button';
 import { AlertCircle, Clock } from 'lucide-react';
+import { AvatarGroup } from './AvatarGroup';
+import { useUsersMap } from '@/lib/hooks/useUsersMap';
 
 interface UpcomingPaymentCardProps {
   payment: any;
 }
 
 export function UpcomingPaymentCard({ payment }: UpcomingPaymentCardProps) {
+  const { usersMap } = useUsersMap();
   const isUrgent = payment.daysUntil <= 3;
   
   return (
@@ -59,19 +62,13 @@ export function UpcomingPaymentCard({ payment }: UpcomingPaymentCardProps) {
       
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 'auto' }}>
         <div style={{ display: 'flex', marginLeft: '8px' }}>
-          <div style={{ width: '28px', height: '28px', borderRadius: '50%', backgroundColor: 'var(--color-primary-container)', border: '2px solid #FFF', marginLeft: '-8px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <span style={{ fontSize: '10px', color: 'var(--color-on-primary-container)', fontWeight: 600 }}>Tú</span>
-          </div>
-          {(payment.sharedWith || []).slice(0, 3).map((u: any, i: number) => (
-            <div key={i} style={{ width: '28px', height: '28px', borderRadius: '50%', backgroundColor: 'var(--color-secondary-container)', border: '2px solid #FFF', marginLeft: '-8px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <span style={{ fontSize: '10px', color: 'var(--color-on-secondary-container)', fontWeight: 600 }}>US</span>
-            </div>
-          ))}
-          {payment.sharedWith && payment.sharedWith.length > 3 && (
-            <div style={{ width: '28px', height: '28px', borderRadius: '50%', backgroundColor: '#E5E7EB', border: '2px solid #FFF', marginLeft: '-8px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <span style={{ fontSize: '10px', color: '#4B5563', fontWeight: 600 }}>+{payment.sharedWith.length - 3}</span>
-            </div>
-          )}
+          <AvatarGroup 
+            users={[
+              { uid: payment.ownerId, email: 'tú', initials: 'TÚ' },
+              ...(payment.sharedWith || []).map((uid: string) => usersMap[uid]).filter(Boolean)
+            ]} 
+            size="sm" 
+          />
         </div>
         
         <Button variant="primary" size="sm" style={{ padding: '8px 16px', borderRadius: '24px' }}>
