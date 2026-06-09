@@ -1,6 +1,6 @@
 .main {
   padding-top: var(--spacing-md);
-  padding-bottom: 100px; /* Space for bottom input */
+  padding-bottom: 160px; /* Space for bottom input and bottom nav */
   display: flex;
   flex-direction: column;
   gap: var(--spacing-lg);
@@ -89,7 +89,7 @@
 /* Fixed Bottom Input */
 .bottomInputContainer {
   position: fixed;
-  bottom: 64px; /* Above BottomNav */
+  bottom: 104px; /* Above BottomNav */
   left: 0;
   right: 0;
   background-color: var(--color-surface);
@@ -131,8 +131,19 @@
 
 .sendBtn {
   border-radius: var(--radius-full);
-  width: 36px;
-  height: 36px;
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  flex-shrink: 0;
   padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+  transition: transform 0.2s;
+}
+
+.sendBtn:active {
+  transform: scale(0.95);
 }
 

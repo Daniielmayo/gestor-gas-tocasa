@@ -38,6 +38,8 @@ export default function SharedList({ params }: { params: Promise<{ id: string }>
   const [newItemContent, setNewItemContent] = useState('');
 
   // Estados para modales
+  const [editingItemId, setEditingItemId] = useState<string | null>(null);
+  const [editItemContent, setEditItemContent] = useState('');
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [editTitle, setEditTitle] = useState('');
   const [isSavingTitle, setIsSavingTitle] = useState(false);
@@ -142,6 +144,29 @@ export default function SharedList({ params }: { params: Promise<{ id: string }>
       });
     } catch (error) {
       console.error("Error al actualizar item:", error);
+    }
+  };
+
+  const handleSaveEditItem = async (itemId: string) => {
+    if (!editItemContent.trim() || !user || !listData) return;
+    try {
+      await updateDoc(doc(db, 'listItems', itemId), { content: editItemContent.trim() });
+      setEditingItemId(null);
+    } catch (e) {
+      console.error("Error editing item", e);
+    }
+  };
+
+  const handleDeleteItem = async (itemId: string, content: string) => {
+    if (!user || !profile || !listData) return;
+    if (!confirm(`¿Estás seguro de eliminar el ítem "${content}"?`)) return;
+    try {
+      await deleteDoc(doc(db, 'listItems', itemId));
+      import('@/lib/history').then(({ logActivity }) => {
+        logActivity(`<strong>${profile.displayName}</strong> eliminó "${content}" de la lista '${listTitle}'`, listData.ownerId, listData.sharedWith || []);
+      });
+    } catch (e) {
+      console.error("Error deleting item", e);
     }
   };
 
@@ -305,16 +330,49 @@ export default function SharedList({ params }: { params: Promise<{ id: string }>
           ) : (
             items.map(item => (
               <div key={item.id} className={`${styles.listItem} ${item.completed ? styles.completedItem : ''}`}>
-                <div className={styles.itemContent}>
-                  <Checkbox 
-                    label={item.content} 
-                    checked={item.completed} 
-                    onChange={() => toggleItem(item.id, item.completed, item.content)} 
-                  />
-                  <span className={styles.itemTag}>
-                    {item.creatorName} • {item.createdAt ? new Date(item.createdAt.toDate()).toLocaleDateString() : 'Añadiendo...'}
-                  </span>
+                <div className={styles.itemContent} style={{ flex: 1 }}>
+                  {editingItemId === item.id ? (
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                      <input 
+                        type="text"
+                        value={editItemContent}
+                        onChange={(e) => setEditItemContent(e.target.value)}
+                        autoFocus
+                        style={{ flex: 1, padding: '8px', borderRadius: '4px', border: '1px solid var(--color-outline-variant)', background: 'transparent', color: 'var(--color-on-surface)' }}
+                      />
+                      <Button variant="ghost" size="sm" onClick={() => handleSaveEditItem(item.id)} style={{ padding: '4px 8px' }}>
+                        <CheckCircle2 size={20} color="var(--color-primary)" />
+                      </Button>
+                      <Button variant="ghost" size="sm" onClick={() => setEditingItemId(null)} style={{ padding: '4px 8px' }}>
+                        Cancelar
+                      </Button>
+                    </div>
+                  ) : (
+                    <>
+                      <Checkbox 
+                        label={item.content} 
+                        checked={item.completed} 
+                        onChange={() => toggleItem(item.id, item.completed, item.content)} 
+                      />
+                      <span className={styles.itemTag}>
+                        {item.creatorName} • {item.createdAt ? new Date(item.createdAt.toDate()).toLocaleDateString() : 'Añadiendo...'}
+                      </span>
+                    </>
+                  )}
                 </div>
+                {!editingItemId && (
+                  <div style={{ display: 'flex', gap: '4px' }}>
+                    <Button variant="ghost" className={styles.iconBtn} onClick={() => {
+                      setEditingItemId(item.id);
+                      setEditItemContent(item.content);
+                    }}>
+                      <Pencil size={18} color="var(--color-on-surface-variant)" />
+                    </Button>
+                    <Button variant="ghost" className={styles.iconBtn} onClick={() => handleDeleteItem(item.id, item.content)}>
+                      <Trash2 size={18} color="var(--color-error)" />
+                    </Button>
+                  </div>
+                )}
               </div>
             ))
           )}
