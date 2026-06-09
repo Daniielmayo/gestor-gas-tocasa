@@ -1,6 +1,6 @@
 .main {
   padding-top: var(--spacing-md);
-  padding-bottom: var(--spacing-xl);
+  padding-bottom: 88px;
   display: flex;
   flex-direction: column;
   gap: var(--spacing-lg);
@@ -99,11 +99,42 @@
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 12px;
+}
+
+.filterBar {
+  display: flex;
+  overflow-x: auto;
+  gap: 8px;
+  padding: 8px 0;
+  margin-bottom: 8px;
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* IE and Edge */
+}
+
+.filterBar::-webkit-scrollbar {
+  display: none; /* Chrome, Safari and Opera */
+}
+
+.filterPill {
+  background-color: #6B7280; /* A dark enough gray so white text is visible */
+  color: #FFFFFF;
+  border: none;
+  border-radius: 16px;
+  padding: 6px 16px;
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.filterPillActive {
+  background-color: var(--color-primary);
+  color: #FFFFFF;
 }
 
 .paymentAmount {
   font-weight: 700;
   color: var(--color-on-surface);
 }
-

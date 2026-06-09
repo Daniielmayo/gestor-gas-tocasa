@@ -45,6 +45,8 @@ export default function SharedList({ params }: { params: Promise<{ id: string }>
   const [shareEmail, setShareEmail] = useState('');
   const [isSharing, setIsSharing] = useState(false);
 
+  const [listData, setListData] = useState<any>(null);
+
   useEffect(() => {
     if (!loading && !user) {
       router.push('/login');
@@ -59,6 +61,7 @@ export default function SharedList({ params }: { params: Promise<{ id: string }>
     const unsubList = onSnapshot(listRef, (docSnap) => {
       if (docSnap.exists()) {
         setListTitle(docSnap.data().title);
+        setListData(docSnap.data());
       } else {
         setListTitle('Lista no encontrada');
       }
@@ -92,7 +95,7 @@ export default function SharedList({ params }: { params: Promise<{ id: string }>
 
   const handleAddItem = async (e: FormEvent) => {
     e.preventDefault();
-    if (!newItemContent.trim() || !user) return;
+    if (!newItemContent.trim() || !user || !profile || !listData) return;
 
     const content = newItemContent.trim();
     setNewItemContent('');
@@ -106,16 +109,32 @@ export default function SharedList({ params }: { params: Promise<{ id: string }>
         creatorName: profile?.displayName?.split(' ')[0] || 'Usuario',
         createdAt: serverTimestamp()
       });
+      import('@/lib/history').then(({ logActivity }) => {
+        logActivity(`<strong>${profile.displayName}</strong> añadió "${content}" a la lista '${listTitle}'`, listData.ownerId, listData.sharedWith || []);
+      });
+      // Bump updatedAt on parent list
+      await updateDoc(doc(db, 'lists', listId), {
+        updatedAt: serverTimestamp()
+      });
     } catch (error) {
       console.error("Error agregando item:", error);
     }
   };
 
-  const toggleItem = async (itemId: string, currentStatus: boolean) => {
+  const toggleItem = async (itemId: string, currentStatus: boolean, content: string) => {
+    if (!user || !profile || !listData) return;
     try {
       const itemRef = doc(db, 'listItems', itemId);
       await updateDoc(itemRef, {
         completed: !currentStatus
+      });
+      const actionStr = !currentStatus ? "completó" : "desmarcó";
+      import('@/lib/history').then(({ logActivity }) => {
+        logActivity(`<strong>${profile.displayName}</strong> ${actionStr} "${content}" en la lista '${listTitle}'`, listData.ownerId, listData.sharedWith || []);
+      });
+      // Bump updatedAt on parent list
+      await updateDoc(doc(db, 'lists', listId), {
+        updatedAt: serverTimestamp()
       });
     } catch (error) {
       console.error("Error al actualizar item:", error);
@@ -138,6 +157,7 @@ export default function SharedList({ params }: { params: Promise<{ id: string }>
   };
 
   const handleDeleteList = async () => {
+    if (!listData || !user || !profile) return;
     setIsDeleting(true);
     try {
       // Borrar primero los items
@@ -149,6 +169,11 @@ export default function SharedList({ params }: { params: Promise<{ id: string }>
       
       // Borrar lista
       await deleteDoc(doc(db, 'lists', listId));
+      
+      import('@/lib/history').then(({ logActivity }) => {
+        logActivity(`<strong>${profile.displayName}</strong> eliminó la lista '${listTitle}'`, listData.ownerId, listData.sharedWith || []);
+      });
+
       router.push('/');
     } catch(e) {
       console.error(e);
@@ -164,7 +189,7 @@ export default function SharedList({ params }: { params: Promise<{ id: string }>
 
   const handleShareList = async (e: FormEvent) => {
     e.preventDefault();
-    if (!shareEmail.trim()) return;
+    if (!shareEmail.trim() || !user || !profile || !listData) return;
     setIsSharing(true);
 
     try {
@@ -181,6 +206,7 @@ export default function SharedList({ params }: { params: Promise<{ id: string }>
 
       const friendDoc = snap.docs[0];
       const friendUid = friendDoc.data().uid;
+      const friendName = friendDoc.data().displayName || shareEmail;
 
       if (friendUid === user?.uid) {
         alert("No puedes invitarte a ti mismo.");
@@ -193,7 +219,13 @@ export default function SharedList({ params }: { params: Promise<{ id: string }>
         sharedWith: arrayUnion(friendUid)
       });
 
-      alert(`¡Lista compartida con éxito con ${friendDoc.data().displayName || shareEmail}!`);
+      import('@/lib/history').then(({ logActivity }) => {
+        // Obtenemos los sharedWith actuales y añadimos al amigo para que también lo vea
+        const newSharedWith = [...(listData.sharedWith || []), friendUid];
+        logActivity(`<strong>${profile.displayName}</strong> compartió la lista '${listTitle}' con ${friendName}`, listData.ownerId, newSharedWith);
+      });
+
+      alert(`¡Lista compartida con éxito con ${friendName}!`);
       setIsShareModalOpen(false);
       setShareEmail('');
     } catch (error) {
@@ -251,7 +283,7 @@ export default function SharedList({ params }: { params: Promise<{ id: string }>
                   <Checkbox 
                     label={item.content} 
                     checked={item.completed} 
-                    onChange={() => toggleItem(item.id, item.completed)} 
+                    onChange={() => toggleItem(item.id, item.completed, item.content)} 
                   />
                   <span className={styles.itemTag}>
                     {item.creatorName} • {item.createdAt ? new Date(item.createdAt.toDate()).toLocaleDateString() : 'Añadiendo...'}

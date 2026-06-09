@@ -22,13 +22,16 @@ interface Payment {
 }
 
 export default function RecurringPayments() {
-  const { user, loading } = useAuth();
+  const { user, profile, loading } = useAuth();
   const router = useRouter();
 
   const [selectedDays, setSelectedDays] = useState<number[]>([]);
   const [title, setTitle] = useState('');
   const [amount, setAmount] = useState('');
   const [payments, setPayments] = useState<Payment[]>([]);
+  
+  // Filter state
+  const [filterDay, setFilterDay] = useState<number | 'all'>('all');
 
   // Modals state
   const [selectedPayment, setSelectedPayment] = useState<Payment | null>(null);
@@ -74,7 +77,7 @@ export default function RecurringPayments() {
 
   const handleSavePayment = async (e: FormEvent) => {
     e.preventDefault();
-    if (!user || !title.trim() || !amount.trim() || selectedDays.length === 0) {
+    if (!user || !profile || !title.trim() || !amount.trim() || selectedDays.length === 0) {
       alert("Por favor completa todos los campos y selecciona al menos un día.");
       return;
     }
@@ -88,6 +91,11 @@ export default function RecurringPayments() {
         sharedWith: [],
         createdAt: serverTimestamp()
       });
+      
+      import('@/lib/history').then(({ logActivity }) => {
+        logActivity(`<strong>${profile.displayName}</strong> programó el pago recurrente '${title.trim()}' por $${amount.trim()}`, user.uid, []);
+      });
+
       setTitle('');
       setAmount('');
       setSelectedDays([]);
@@ -109,7 +117,7 @@ export default function RecurringPayments() {
 
   const handleSharePayment = async (e: FormEvent) => {
     e.preventDefault();
-    if (!shareEmail.trim() || !selectedPayment) return;
+    if (!shareEmail.trim() || !selectedPayment || !user || !profile) return;
     setIsProcessing(true);
 
     try {
@@ -124,6 +132,7 @@ export default function RecurringPayments() {
       }
 
       const friendUid = snap.docs[0].data().uid;
+      const friendName = snap.docs[0].data().displayName || shareEmail;
 
       if (friendUid === user?.uid) {
         alert("No puedes invitarte a ti mismo.");
@@ -133,6 +142,10 @@ export default function RecurringPayments() {
 
       await updateDoc(doc(db, 'recurringPayments', selectedPayment.id), {
         sharedWith: arrayUnion(friendUid)
+      });
+      
+      import('@/lib/history').then(({ logActivity }) => {
+        logActivity(`<strong>${profile.displayName}</strong> compartió el pago '${selectedPayment.title}' con ${friendName}`, selectedPayment.ownerId, [...(selectedPayment as any).sharedWith || [], friendUid]);
       });
 
       alert(`¡Pago compartido con éxito!`);
@@ -147,10 +160,15 @@ export default function RecurringPayments() {
   };
 
   const handleDeletePayment = async () => {
-    if (!selectedPayment) return;
+    if (!selectedPayment || !profile) return;
     setIsProcessing(true);
     try {
       await deleteDoc(doc(db, 'recurringPayments', selectedPayment.id));
+      
+      import('@/lib/history').then(({ logActivity }) => {
+        logActivity(`<strong>${profile.displayName}</strong> eliminó el pago recurrente '${selectedPayment.title}'`, selectedPayment.ownerId, (selectedPayment as any).sharedWith || []);
+      });
+
       setIsDeleteModalOpen(false);
     } catch (error) {
       console.error(error);
@@ -225,12 +243,35 @@ export default function RecurringPayments() {
       </Card>
 
       {/* Lista de Obligaciones */}
-      <h2 className="text-headline-sm" style={{ marginTop: '8px' }}>Tus Obligaciones</h2>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px' }}>
+        <h2 className="text-headline-sm">Tus Obligaciones</h2>
+      </div>
+
+      {payments.length > 0 && (
+        <div className={styles.filterBar}>
+          <button 
+            className={`${styles.filterPill} ${filterDay === 'all' ? styles.filterPillActive : ''}`}
+            onClick={() => setFilterDay('all')}
+          >
+            Todos
+          </button>
+          {Array.from(new Set(payments.flatMap(p => p.days))).sort((a,b) => a - b).map(day => (
+            <button 
+              key={day}
+              className={`${styles.filterPill} ${filterDay === day ? styles.filterPillActive : ''}`}
+              onClick={() => setFilterDay(day)}
+            >
+              Día {day}
+            </button>
+          ))}
+        </div>
+      )}
+
       <section className={styles.listSection}>
         {payments.length === 0 ? (
           <p className="text-body-sm text-center" style={{ color: 'var(--color-on-surface-variant)', marginTop: '16px' }}>No tienes pagos programados.</p>
         ) : (
-          payments.map(payment => (
+          (filterDay === 'all' ? payments : payments.filter(p => p.days.includes(filterDay))).map(payment => (
             <Card key={payment.id} interactive className={styles.paymentCard}>
               <div className={styles.paymentIcon}>
                 <Calendar size={24} color="var(--color-primary)" />

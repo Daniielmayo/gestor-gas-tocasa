@@ -18,10 +18,14 @@ interface HistoryLog {
   createdAt: any;
 }
 
+// Removed Alerts and Payments interfaces and getDaysUntil as they moved to Notificaciones
+
 export default function Historial() {
   const { user, loading } = useAuth();
   const router = useRouter();
+  
   const [logs, setLogs] = useState<HistoryLog[]>([]);
+  const [isReady, setIsReady] = useState(false);
 
   useEffect(() => {
     if (!loading && !user) {
@@ -32,8 +36,9 @@ export default function Historial() {
   useEffect(() => {
     if (!user) return;
 
+    // 1. Suscribirse al Historial
     const logsRef = collection(db, 'history');
-    const q = query(
+    const qLogs = query(
       logsRef,
       or(
         where('ownerId', '==', user.uid),
@@ -42,21 +47,24 @@ export default function Historial() {
       orderBy('createdAt', 'desc')
     );
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
+    const unsubLogs = onSnapshot(qLogs, (snapshot) => {
       const data: HistoryLog[] = [];
       snapshot.forEach(doc => {
         data.push({ id: doc.id, ...doc.data() } as HistoryLog);
       });
       setLogs(data);
+      setIsReady(true);
     });
 
-    return () => unsubscribe();
+    return () => {
+      unsubLogs();
+    };
   }, [user]);
 
-  if (loading || !user) {
+  if (loading || !user || !isReady) {
     return (
       <main className={`container ${styles.main}`}>
-        <Spinner message="Cargando historial..." />
+        <Spinner message="Cargando notificaciones..." />
       </main>
     );
   }
@@ -69,22 +77,34 @@ export default function Historial() {
             <ArrowLeft size={24} />
           </Button>
         </Link>
-        <h1 className="text-headline-md">Historial</h1>
+        <h1 className="text-headline-md">Historial de Actividad</h1>
         <Button variant="ghost" className={styles.iconBtn}>
           <Search size={24} />
         </Button>
       </header>
 
       <section className={styles.timeline}>
-        {logs.length === 0 ? (
-          <p className="text-body-sm text-center" style={{ color: 'var(--color-on-surface-variant)', marginTop: '16px' }}>No hay actividad reciente.</p>
-        ) : (
-          logs.map(log => (
-            <Card key={log.id} className={styles.historyCard}>
-              <p className="text-body-md" style={{ color: 'var(--color-on-surface)' }} dangerouslySetInnerHTML={{ __html: log.message }} />
-            </Card>
-          ))
-        )}
+        
+        {/* Normal History */}
+        <div>
+          <h2 className="text-label-md" style={{ color: 'var(--color-on-surface-variant)', marginBottom: '12px', paddingLeft: '8px', textTransform: 'uppercase', letterSpacing: '1px' }}>Actividad Reciente</h2>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            {logs.length === 0 ? (
+              <p className="text-body-sm text-center" style={{ color: 'var(--color-on-surface-variant)', marginTop: '16px' }}>No hay actividad reciente.</p>
+            ) : (
+              logs.map(log => (
+                <Card key={log.id} className={styles.historyCard}>
+                  <p className="text-body-md" style={{ color: 'var(--color-on-surface)' }} dangerouslySetInnerHTML={{ __html: log.message }} />
+                  {log.createdAt && (
+                    <p className="text-label-sm" style={{ color: 'var(--color-on-surface-variant)', marginTop: '8px' }}>
+                      {new Date(log.createdAt.toDate()).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                    </p>
+                  )}
+                </Card>
+              ))
+            )}
+          </div>
+        </div>
       </section>
     </main>
   );

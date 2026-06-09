@@ -124,3 +124,20 @@
 .avatarOverlap:first-child {
   margin-left: 0;
 }
+
+.carouselContainer {
+  display: flex;
+  gap: 16px;
+  overflow-x: auto;
+  padding: 8px 0 16px;
+  margin: 0 -16px;
+  padding-left: 16px;
+  padding-right: 16px;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* IE and Edge */
+}
+
+.carouselContainer::-webkit-scrollbar {
+  display: none; /* Chrome, Safari and Opera */
+}
