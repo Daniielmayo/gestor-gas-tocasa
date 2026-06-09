@@ -11,8 +11,9 @@ import { ArrowLeft, ArrowUpRight, ArrowDownRight, TrendingUp, TrendingDown, Wall
 import styles from './finanzas.module.css';
 import { useAuth } from '@/context/AuthContext';
 import { db } from '@/lib/firebase';
-import { collection, query, where, onSnapshot, addDoc, Timestamp, or, doc, setDoc, arrayUnion, getDocs, deleteDoc } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, addDoc, Timestamp, or, doc, setDoc, arrayUnion, getDocs, deleteDoc, updateDoc, increment } from 'firebase/firestore';
 import { formatCOP, formatInputCOP, parseCOP } from '@/lib/currency';
+import { PiggyBank, Plus, Target } from 'lucide-react';
 
 interface Transaction {
   id: string;
@@ -31,6 +32,15 @@ interface CustomCategory {
   id: string;
   name: string;
   type: 'income' | 'expense';
+}
+
+interface SavingGoal {
+  id: string;
+  title: string;
+  targetAmount: number;
+  currentAmount: number;
+  ownerId: string;
+  sharedWith?: string[];
 }
 
 export default function Finanzas() {
@@ -69,6 +79,16 @@ export default function Finanzas() {
   // Recurring payments state for linking
   const [recurringPayments, setRecurringPayments] = useState<any[]>([]);
   const [selectedRecurringPaymentId, setSelectedRecurringPaymentId] = useState('');
+
+  // Savings state
+  const [savings, setSavings] = useState<SavingGoal[]>([]);
+  const [isNewSavingModalOpen, setIsNewSavingModalOpen] = useState(false);
+  const [savingTitle, setSavingTitle] = useState('');
+  const [savingTarget, setSavingTarget] = useState('');
+  const [isContributeModalOpen, setIsContributeModalOpen] = useState(false);
+  const [selectedSaving, setSelectedSaving] = useState<SavingGoal | null>(null);
+  const [contributeType, setContributeType] = useState<'add' | 'withdraw'>('add');
+  const [contributeAmount, setContributeAmount] = useState('');
 
   // Delete transaction state
   const [isDeleteTxModalOpen, setIsDeleteTxModalOpen] = useState(false);
@@ -144,11 +164,26 @@ export default function Finanzas() {
       setRecurringPayments(data);
     });
 
+    const savRef = collection(db, 'savings');
+    const qSav = query(
+      savRef,
+      or(
+        where('ownerId', '==', user.uid),
+        where('sharedWith', 'array-contains', user.uid)
+      )
+    );
+    const unsubSav = onSnapshot(qSav, (snapshot) => {
+      const data: SavingGoal[] = [];
+      snapshot.forEach(doc => data.push({ id: doc.id, ...doc.data() } as SavingGoal));
+      setSavings(data);
+    });
+
     return () => {
       unsubTx();
       unsubSettings();
       unsubCat();
       unsubPay();
+      unsubSav();
     };
   }, [user]);
 
@@ -281,6 +316,64 @@ export default function Finanzas() {
     }
   };
 
+  const handleCreateSaving = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!savingTitle.trim() || !savingTarget || isSubmitting || !user) return;
+    setIsSubmitting(true);
+    try {
+      await addDoc(collection(db, 'savings'), {
+        title: savingTitle.trim(),
+        targetAmount: parseCOP(savingTarget),
+        currentAmount: 0,
+        ownerId: user.uid,
+        sharedWith: financeSettings?.sharedWith || [],
+        createdAt: Timestamp.now()
+      });
+      setIsNewSavingModalOpen(false);
+      setSavingTitle('');
+      setSavingTarget('');
+    } catch (error) {
+      console.error(error);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleContributeSaving = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedSaving || !contributeAmount || isSubmitting || !user) return;
+    setIsSubmitting(true);
+    try {
+      const amt = parseCOP(contributeAmount);
+      const isAdd = contributeType === 'add';
+      
+      // Update saving amount
+      await updateDoc(doc(db, 'savings', selectedSaving.id), {
+        currentAmount: increment(isAdd ? amt : -amt)
+      });
+      
+      // Add transaction
+      await addDoc(collection(db, 'transactions'), {
+        type: isAdd ? 'expense' : 'income',
+        amount: amt,
+        category: `Ahorro: ${selectedSaving.title}`,
+        description: isAdd ? 'Aporte a ahorro' : 'Retiro de ahorro',
+        ownerId: user.uid,
+        ownerName: profile?.displayName?.split(' ')[0] || 'Usuario',
+        sharedWith: financeSettings?.sharedWith || [],
+        createdAt: Timestamp.now(),
+      });
+      
+      setIsContributeModalOpen(false);
+      setContributeAmount('');
+      setSelectedSaving(null);
+    } catch (error) {
+      console.error(error);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   if (loading || !user || !isReady) {
     return (
       <main className={`container ${styles.main}`}>
@@ -317,6 +410,15 @@ export default function Finanzas() {
   const totalIncome = filteredTransactions.filter(t => t.type === 'income').reduce((acc, t) => acc + t.amount, 0);
   const totalExpense = filteredTransactions.filter(t => t.type === 'expense').reduce((acc, t) => acc + t.amount, 0);
   const balance = totalIncome - totalExpense;
+
+  const filteredSavings = savings.filter(s => {
+    if (filterMode === 'personal') {
+      return s.ownerId === user.uid && (!s.sharedWith || s.sharedWith.length === 0);
+    } else if (filterMode === 'shared') {
+      return s.ownerId !== user.uid || (s.sharedWith && s.sharedWith.length > 0);
+    }
+    return true;
+  });
 
   const incomeCats = [...predefinedIncomeCategories, ...customCategories.filter(c => c.type === 'income').map(c => c.name), 'Otro'];
   const expenseCats = [...predefinedExpenseCategories, ...customCategories.filter(c => c.type === 'expense').map(c => c.name), 'Otro'];
@@ -388,6 +490,48 @@ export default function Finanzas() {
             Compartidas
           </Button>
         </div>
+      </section>
+
+      <section className={styles.savingsSection}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <h3 className={styles.sectionTitle}>Metas de Ahorro</h3>
+          <Button variant="ghost" onClick={() => setIsNewSavingModalOpen(true)} className={styles.iconBtn} aria-label="Nueva meta de ahorro">
+            <Plus size={20} color="var(--color-primary)" />
+          </Button>
+        </div>
+        
+        {filteredSavings.length === 0 ? (
+          <div className={styles.emptySavings}>
+            <PiggyBank size={32} color="var(--color-on-surface-variant)" />
+            <p className="text-body-sm" style={{ color: 'var(--color-on-surface-variant)' }}>No tienes metas de ahorro.</p>
+          </div>
+        ) : (
+          <div className={styles.savingsList}>
+            {filteredSavings.map(s => {
+              const progress = Math.min((s.currentAmount / s.targetAmount) * 100, 100);
+              return (
+                <div key={s.id} className={styles.savingCard} onClick={() => { setSelectedSaving(s); setIsContributeModalOpen(true); }}>
+                  <div className={styles.savingHeader}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <Target size={20} color="var(--color-primary)" />
+                      <span className="text-body-md" style={{ fontWeight: 600 }}>{s.title}</span>
+                    </div>
+                    <span className="text-label-sm" style={{ color: 'var(--color-on-surface-variant)' }}>
+                      {progress.toFixed(0)}%
+                    </span>
+                  </div>
+                  <div className={styles.savingProgressBg}>
+                    <div className={styles.savingProgressFill} style={{ width: `${progress}%` }} />
+                  </div>
+                  <div className={styles.savingAmounts}>
+                    <span className="text-label-sm" style={{ color: 'var(--color-on-surface)' }}>{formatCOP(s.currentAmount)}</span>
+                    <span className="text-label-sm" style={{ color: 'var(--color-on-surface-variant)' }}>de {formatCOP(s.targetAmount)}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </section>
 
       <section className={styles.transactionsSection}>
@@ -668,6 +812,62 @@ export default function Finanzas() {
             )}
           </div>
         </div>
+      </Modal>
+
+      {/* New Saving Modal */}
+      <Modal isOpen={isNewSavingModalOpen} onClose={() => setIsNewSavingModalOpen(false)} title="Nueva Meta de Ahorro">
+        <form onSubmit={handleCreateSaving} style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginTop: '16px' }}>
+          <Input 
+            label="Nombre de la Meta" 
+            placeholder="Ej. Vacaciones, Muebles..." 
+            value={savingTitle}
+            onChange={(e) => setSavingTitle(e.target.value)}
+            required
+            autoFocus
+          />
+          <Input 
+            label="Monto Objetivo" 
+            type="text"
+            placeholder="Ej. 5.000.000" 
+            value={savingTarget}
+            onChange={(e) => setSavingTarget(formatInputCOP(e.target.value))}
+            required
+          />
+          <Button type="submit" variant="primary" fullWidth disabled={!savingTitle || !savingTarget || isSubmitting}>
+            {isSubmitting ? 'Guardando...' : 'Crear Meta'}
+          </Button>
+        </form>
+      </Modal>
+
+      {/* Contribute/Withdraw Saving Modal */}
+      <Modal isOpen={isContributeModalOpen} onClose={() => { setIsContributeModalOpen(false); setSelectedSaving(null); }} title={selectedSaving?.title || 'Meta de Ahorro'}>
+        {selectedSaving && (
+          <form onSubmit={handleContributeSaving} style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginTop: '16px' }}>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <Button type="button" variant={contributeType === 'add' ? 'primary' : 'secondary'} fullWidth onClick={() => setContributeType('add')}>
+                Aportar
+              </Button>
+              <Button type="button" variant={contributeType === 'withdraw' ? 'danger' : 'secondary'} fullWidth onClick={() => setContributeType('withdraw')}>
+                Retirar
+              </Button>
+            </div>
+            <Input 
+              label={`Monto a ${contributeType === 'add' ? 'Aportar' : 'Retirar'}`} 
+              type="text"
+              placeholder="Ej. 100.000" 
+              value={contributeAmount}
+              onChange={(e) => setContributeAmount(formatInputCOP(e.target.value))}
+              required
+              autoFocus
+            />
+            <p className="text-label-sm" style={{ color: 'var(--color-on-surface-variant)', textAlign: 'center' }}>
+              {contributeType === 'add' ? 'El aporte se descontará como egreso de tu balance.' : 'El retiro se sumará como ingreso a tu balance.'}
+            </p>
+            <Button type="submit" variant={contributeType === 'add' ? 'primary' : 'danger'} fullWidth disabled={!contributeAmount || isSubmitting}>
+              {isSubmitting ? 'Procesando...' : contributeType === 'add' ? 'Guardar Aporte' : 'Retirar Dinero'}
+            </Button>
+          </form>
+        )}
       </Modal>
     </main>
   );

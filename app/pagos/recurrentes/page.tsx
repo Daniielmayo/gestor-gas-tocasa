@@ -21,7 +21,19 @@ interface Payment {
   days: number[];
   ownerId: string;
   sharedWith?: string[];
+  category?: string;
 }
+
+const PAYMENT_CATEGORIES = [
+  'Hogar / Casa',
+  'Servicios Públicos',
+  'Streaming / Suscripciones',
+  'Salud / Médico',
+  'Educación',
+  'Transporte',
+  'Tarjetas / Créditos',
+  'Otros'
+];
 
 export default function RecurringPayments() {
   const { user, profile, loading } = useAuth();
@@ -30,6 +42,7 @@ export default function RecurringPayments() {
   const [selectedDays, setSelectedDays] = useState<number[]>([]);
   const [title, setTitle] = useState('');
   const [amount, setAmount] = useState('');
+  const [category, setCategory] = useState(PAYMENT_CATEGORIES[0]);
   const [payments, setPayments] = useState<Payment[]>([]);
   
   // Filter state
@@ -136,6 +149,7 @@ export default function RecurringPayments() {
         days: selectedDays.sort((a,b) => a - b),
         ownerId: user.uid,
         sharedWith: isShared && paymentsSettings?.sharedWith ? paymentsSettings.sharedWith : [],
+        category: category,
         createdAt: serverTimestamp()
       };
 
@@ -148,6 +162,7 @@ export default function RecurringPayments() {
       setTitle('');
       setAmount('');
       setSelectedDays([]);
+      setCategory(PAYMENT_CATEGORIES[0]);
       setIsShared(true);
     } catch (error) {
       console.error("Error al guardar pago:", error);
@@ -272,6 +287,31 @@ export default function RecurringPayments() {
             required
           />
           
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            <label className="text-label-md" style={{ color: 'var(--color-on-surface)' }}>
+              Categoría
+            </label>
+            <select 
+              value={category} 
+              onChange={(e) => setCategory(e.target.value)}
+              style={{
+                width: '100%',
+                padding: '12px 16px',
+                borderRadius: '12px',
+                border: '1px solid var(--color-outline-variant)',
+                backgroundColor: 'var(--color-surface-container-lowest)',
+                color: 'var(--color-on-surface)',
+                fontFamily: 'inherit',
+                fontSize: '16px',
+                appearance: 'none',
+              }}
+            >
+              {PAYMENT_CATEGORIES.map(cat => (
+                <option key={cat} value={cat}>{cat}</option>
+              ))}
+            </select>
+          </div>
+          
           <div className={styles.frequencyGroup}>
             <label className="text-label-md" style={{ color: 'var(--color-on-surface)' }}>
               Días de Cobro (Se repetirá cada mes)
@@ -362,56 +402,72 @@ export default function RecurringPayments() {
         {payments.length === 0 ? (
           <p className="text-body-sm text-center" style={{ color: 'var(--color-on-surface-variant)', marginTop: '16px' }}>No tienes pagos programados.</p>
         ) : (
-          (filterDay === 'all' ? payments : payments.filter(p => p.days.includes(filterDay)))
-          .filter(p => {
-            if (filterVisibility === 'personal') return p.ownerId === user.uid && (!p.sharedWith || p.sharedWith.length === 0);
-            if (filterVisibility === 'shared') return p.ownerId !== user.uid || (p.sharedWith && p.sharedWith.length > 0);
-            return true;
-          })
-          .map(payment => (
-            <Card key={payment.id} interactive className={styles.paymentCard}>
-              <div className={styles.paymentIcon}>
-                <Calendar size={24} color="var(--color-primary)" />
+          Object.entries(
+            (filterDay === 'all' ? payments : payments.filter(p => p.days.includes(filterDay)))
+              .filter(p => {
+                if (filterVisibility === 'personal') return p.ownerId === user.uid && (!p.sharedWith || p.sharedWith.length === 0);
+                if (filterVisibility === 'shared') return p.ownerId !== user.uid || (p.sharedWith && p.sharedWith.length > 0);
+                return true;
+              })
+              .reduce((acc, p) => {
+                const cat = p.category || 'Otros';
+                if (!acc[cat]) acc[cat] = [];
+                acc[cat].push(p);
+                return acc;
+              }, {} as Record<string, Payment[]>)
+          ).sort(([a], [b]) => a.localeCompare(b)).map(([catName, groupPayments]) => (
+            <div key={catName} style={{ marginBottom: '16px' }}>
+              <h3 className="text-label-md" style={{ color: 'var(--color-primary)', marginBottom: '8px', paddingLeft: '4px' }}>
+                {catName}
+              </h3>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                {groupPayments.map(payment => (
+                  <Card key={payment.id} interactive className={styles.paymentCard} style={{ marginBottom: 0 }}>
+                    <div className={styles.paymentIcon}>
+                      <Calendar size={24} color="var(--color-primary)" />
+                    </div>
+                    <div className={styles.paymentInfo} style={{ flex: 1 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                        <h3 className="text-body-lg" style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          {payment.title}
+                          {payment.ownerId !== user.uid || (payment.sharedWith && payment.sharedWith.length > 0) ? (
+                            <Users size={16} color="var(--color-primary)" />
+                          ) : (
+                            <Lock size={16} color="var(--color-on-surface-variant)" />
+                          )}
+                        </h3>
+                        {paidPaymentIds.has(payment.id) && (
+                          <span style={{ 
+                            fontSize: '12px', 
+                            backgroundColor: 'var(--color-success)', 
+                            color: '#FFFFFF', 
+                            padding: '2px 8px', 
+                            borderRadius: '12px',
+                            fontWeight: 500,
+                            whiteSpace: 'nowrap'
+                          }}>
+                            ✅ Pagado
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-label-sm" style={{ color: 'var(--color-warning)' }}>
+                        Se cobra los días: {payment.days.sort((a,b) => a - b).join(', ')} de cada mes
+                      </p>
+                      <div style={{ marginTop: '4px' }}>
+                        <span className="text-headline-sm" style={{ color: paidPaymentIds.has(payment.id) ? 'var(--color-success)' : 'inherit' }}>
+                          {formatCOP(Number(payment.amount))}
+                        </span>
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      <Button variant="ghost" onClick={() => openDeleteModal(payment)} aria-label="Eliminar" style={{ padding: '8px', height: 'auto', minWidth: 'auto' }}>
+                        <Trash2 size={20} color="var(--color-error)" />
+                      </Button>
+                    </div>
+                  </Card>
+                ))}
               </div>
-              <div className={styles.paymentInfo} style={{ flex: 1 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                  <h3 className="text-body-lg" style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    {payment.title}
-                    {payment.ownerId !== user.uid || (payment.sharedWith && payment.sharedWith.length > 0) ? (
-                      <Users size={16} color="var(--color-primary)" />
-                    ) : (
-                      <Lock size={16} color="var(--color-on-surface-variant)" />
-                    )}
-                  </h3>
-                  {paidPaymentIds.has(payment.id) && (
-                    <span style={{ 
-                      fontSize: '12px', 
-                      backgroundColor: 'var(--color-success)', 
-                      color: '#FFFFFF', 
-                      padding: '2px 8px', 
-                      borderRadius: '12px',
-                      fontWeight: 500,
-                      whiteSpace: 'nowrap'
-                    }}>
-                      ✅ Pagado
-                    </span>
-                  )}
-                </div>
-                <p className="text-label-sm" style={{ color: 'var(--color-warning)' }}>
-                  Se cobra los días: {payment.days.sort((a,b) => a - b).join(', ')} de cada mes
-                </p>
-                <div style={{ marginTop: '4px' }}>
-                  <span className="text-headline-sm" style={{ color: paidPaymentIds.has(payment.id) ? 'var(--color-success)' : 'inherit' }}>
-                    {formatCOP(Number(payment.amount))}
-                  </span>
-                </div>
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                <Button variant="ghost" onClick={() => openDeleteModal(payment)} aria-label="Eliminar" style={{ padding: '8px', height: 'auto', minWidth: 'auto' }}>
-                  <Trash2 size={20} color="var(--color-error)" />
-                </Button>
-              </div>
-            </Card>
+            </div>
           ))
         )}
       </section>
