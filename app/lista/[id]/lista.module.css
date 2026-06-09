@@ -1,6 +1,6 @@
 .main {
   padding-top: var(--spacing-md);
-  padding-bottom: 160px; /* Space for bottom input and bottom nav */
+  padding-bottom: 220px; /* Ensure space for bottom input and bottom nav even on large lists */
   display: flex;
   flex-direction: column;
   gap: var(--spacing-lg);
