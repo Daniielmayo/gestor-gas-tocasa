@@ -7,11 +7,11 @@ import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { Spinner } from '@/components/ui/Spinner';
 import { Modal } from '@/components/ui/Modal';
-import { ArrowLeft, Calendar, Settings, UserPlus, Trash2 } from 'lucide-react';
+import { ArrowLeft, Calendar, Settings, UserPlus, Trash2, Lock, Users } from 'lucide-react';
 import styles from './recurrentes.module.css';
 import { useAuth } from '@/context/AuthContext';
 import { db } from '@/lib/firebase';
-import { collection, query, where, onSnapshot, addDoc, serverTimestamp, or, doc, updateDoc, deleteDoc, getDocs, arrayUnion } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, addDoc, serverTimestamp, or, doc, updateDoc, deleteDoc, getDocs, arrayUnion, setDoc } from 'firebase/firestore';
 import { formatCOP, formatInputCOP, parseCOP } from '@/lib/currency';
 
 interface Payment {
@@ -20,6 +20,7 @@ interface Payment {
   amount: string;
   days: number[];
   ownerId: string;
+  sharedWith?: string[];
 }
 
 export default function RecurringPayments() {
@@ -33,6 +34,10 @@ export default function RecurringPayments() {
   
   // Filter state
   const [filterDay, setFilterDay] = useState<number | 'all'>('all');
+  const [filterVisibility, setFilterVisibility] = useState<'all' | 'personal' | 'shared'>('all');
+
+  // Form state
+  const [isShared, setIsShared] = useState(true);
 
   // Modals state
   const [selectedPayment, setSelectedPayment] = useState<Payment | null>(null);
@@ -40,6 +45,7 @@ export default function RecurringPayments() {
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [shareEmail, setShareEmail] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
+  const [paymentsSettings, setPaymentsSettings] = useState<any>(null);
 
   useEffect(() => {
     if (!loading && !user) {
@@ -67,7 +73,19 @@ export default function RecurringPayments() {
       setPayments(data);
     });
 
-    return () => unsubscribe();
+    const settingsRef = doc(db, 'paymentsSettings', user.uid);
+    const unsubSettings = onSnapshot(settingsRef, (docSnap) => {
+      if (docSnap.exists()) {
+        setPaymentsSettings(docSnap.data());
+      } else {
+        setPaymentsSettings({ sharedWith: [] });
+      }
+    });
+
+    return () => {
+      unsubscribe();
+      unsubSettings();
+    };
   }, [user]);
 
   const toggleDay = (day: number) => {
@@ -89,7 +107,7 @@ export default function RecurringPayments() {
         amount: parseCOP(amount),
         days: selectedDays.sort((a,b) => a - b),
         ownerId: user.uid,
-        sharedWith: [],
+        sharedWith: isShared && paymentsSettings?.sharedWith ? paymentsSettings.sharedWith : [],
         createdAt: serverTimestamp()
       };
 
@@ -102,13 +120,13 @@ export default function RecurringPayments() {
       setTitle('');
       setAmount('');
       setSelectedDays([]);
+      setIsShared(true);
     } catch (error) {
       console.error("Error al guardar pago:", error);
     }
   };
 
-  const openShareModal = (payment: Payment) => {
-    setSelectedPayment(payment);
+  const openShareModal = () => {
     setShareEmail('');
     setIsShareModalOpen(true);
   };
@@ -120,7 +138,7 @@ export default function RecurringPayments() {
 
   const handleSharePayment = async (e: FormEvent) => {
     e.preventDefault();
-    if (!shareEmail.trim() || !selectedPayment || !user || !profile) return;
+    if (!shareEmail.trim() || !user || !profile) return;
     setIsProcessing(true);
 
     try {
@@ -134,29 +152,27 @@ export default function RecurringPayments() {
         return;
       }
 
-      const friendUid = snap.docs[0].data().uid;
-      const friendName = snap.docs[0].data().displayName || shareEmail;
+      const friendDoc = snap.docs[0];
+      const friendUid = friendDoc.data().uid;
+      const friendName = friendDoc.data().displayName || shareEmail;
 
-      if (friendUid === user?.uid) {
+      if (friendUid === user.uid) {
         alert("No puedes invitarte a ti mismo.");
         setIsProcessing(false);
         return;
       }
 
-      await updateDoc(doc(db, 'recurringPayments', selectedPayment.id), {
+      const settingsRef = doc(db, 'paymentsSettings', user.uid);
+      await setDoc(settingsRef, {
         sharedWith: arrayUnion(friendUid)
-      });
-      
-      import('@/lib/history').then(({ logActivity }) => {
-        logActivity(`<strong>${profile.displayName}</strong> compartió el pago '${selectedPayment.title}' con ${friendName}`, selectedPayment.ownerId, [...(selectedPayment as any).sharedWith || [], friendUid]);
-      });
+      }, { merge: true });
 
-      alert(`¡Pago compartido con éxito!`);
+      alert(`¡Módulo de pagos compartido con éxito con ${friendName}!`);
       setIsShareModalOpen(false);
       setShareEmail('');
     } catch (error) {
       console.error(error);
-      alert("Hubo un error al compartir el pago");
+      alert("Hubo un error al compartir.");
     } finally {
       setIsProcessing(false);
     }
@@ -199,10 +215,14 @@ export default function RecurringPayments() {
             <ArrowLeft size={24} />
           </Button>
         </Link>
-        <h1 className="text-headline-md">Pagos Recurrentes</h1>
-        <Button variant="ghost" className={styles.iconBtn}>
-          <Settings size={24} />
-        </Button>
+        <div className={styles.titleContainer} style={{ flex: 1, overflow: 'hidden', marginLeft: '16px' }}>
+          <h1 className="text-headline-md">Pagos</h1>
+        </div>
+        <div style={{ display: 'flex', gap: '4px' }}>
+          <Button variant="ghost" className={styles.iconBtn} onClick={openShareModal}>
+            <UserPlus size={20} color="var(--color-primary)" />
+          </Button>
+        </div>
       </header>
 
       {/* Formulario de Nuevo Pago */}
@@ -242,6 +262,21 @@ export default function RecurringPayments() {
             </div>
           </div>
 
+          {paymentsSettings?.sharedWith?.length > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '8px' }}>
+              <input 
+                type="checkbox" 
+                id="sharePayment" 
+                checked={isShared} 
+                onChange={(e) => setIsShared(e.target.checked)} 
+                style={{ width: '18px', height: '18px', accentColor: 'var(--color-primary)' }}
+              />
+              <label htmlFor="sharePayment" className="text-body-md" style={{ color: 'var(--color-on-surface)' }}>
+                Compartir pago con el hogar
+              </label>
+            </div>
+          )}
+
           <Button type="submit" fullWidth className={styles.saveBtn}>Guardar Pago</Button>
         </form>
       </Card>
@@ -249,6 +284,30 @@ export default function RecurringPayments() {
       {/* Lista de Obligaciones */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px' }}>
         <h2 className="text-headline-sm">Tus Obligaciones</h2>
+      </div>
+
+      <div style={{ display: 'flex', gap: '8px', marginTop: '16px', overflowX: 'auto', paddingBottom: '8px' }}>
+        <Button 
+          variant={filterVisibility === 'all' ? 'primary' : 'secondary'} 
+          onClick={() => setFilterVisibility('all')}
+          style={{ borderRadius: '20px', padding: '4px 12px', fontSize: '14px', flex: '0 0 auto', minHeight: 'auto' }}
+        >
+          Todos
+        </Button>
+        <Button 
+          variant={filterVisibility === 'personal' ? 'primary' : 'secondary'} 
+          onClick={() => setFilterVisibility('personal')}
+          style={{ borderRadius: '20px', padding: '4px 12px', fontSize: '14px', flex: '0 0 auto', minHeight: 'auto' }}
+        >
+          Personales
+        </Button>
+        <Button 
+          variant={filterVisibility === 'shared' ? 'primary' : 'secondary'} 
+          onClick={() => setFilterVisibility('shared')}
+          style={{ borderRadius: '20px', padding: '4px 12px', fontSize: '14px', flex: '0 0 auto', minHeight: 'auto' }}
+        >
+          Compartidos
+        </Button>
       </div>
 
       {payments.length > 0 && (
@@ -275,13 +334,26 @@ export default function RecurringPayments() {
         {payments.length === 0 ? (
           <p className="text-body-sm text-center" style={{ color: 'var(--color-on-surface-variant)', marginTop: '16px' }}>No tienes pagos programados.</p>
         ) : (
-          (filterDay === 'all' ? payments : payments.filter(p => p.days.includes(filterDay))).map(payment => (
+          (filterDay === 'all' ? payments : payments.filter(p => p.days.includes(filterDay)))
+          .filter(p => {
+            if (filterVisibility === 'personal') return p.ownerId === user.uid && (!p.sharedWith || p.sharedWith.length === 0);
+            if (filterVisibility === 'shared') return p.ownerId !== user.uid || (p.sharedWith && p.sharedWith.length > 0);
+            return true;
+          })
+          .map(payment => (
             <Card key={payment.id} interactive className={styles.paymentCard}>
               <div className={styles.paymentIcon}>
                 <Calendar size={24} color="var(--color-primary)" />
               </div>
               <div className={styles.paymentInfo} style={{ flex: 1 }}>
-                <h3 className="text-body-lg" style={{ fontWeight: 600 }}>{payment.title}</h3>
+                <h3 className="text-body-lg" style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  {payment.title}
+                  {payment.ownerId !== user.uid || (payment.sharedWith && payment.sharedWith.length > 0) ? (
+                    <Users size={16} color="var(--color-primary)" />
+                  ) : (
+                    <Lock size={16} color="var(--color-on-surface-variant)" />
+                  )}
+                </h3>
                 <p className="text-label-sm" style={{ color: 'var(--color-warning)' }}>
                   Se cobra los días: {payment.days.sort((a,b) => a - b).join(', ')} de cada mes
                 </p>
@@ -290,9 +362,6 @@ export default function RecurringPayments() {
                 </div>
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                <Button variant="ghost" onClick={() => openShareModal(payment)} aria-label="Compartir" style={{ padding: '8px', height: 'auto', minWidth: 'auto' }}>
-                  <UserPlus size={20} color="var(--color-primary)" />
-                </Button>
                 <Button variant="ghost" onClick={() => openDeleteModal(payment)} aria-label="Eliminar" style={{ padding: '8px', height: 'auto', minWidth: 'auto' }}>
                   <Trash2 size={20} color="var(--color-error)" />
                 </Button>
@@ -303,10 +372,10 @@ export default function RecurringPayments() {
       </section>
 
       {/* Share Modal */}
-      <Modal isOpen={isShareModalOpen} onClose={() => !isProcessing && setIsShareModalOpen(false)} title="Compartir Pago">
+      <Modal isOpen={isShareModalOpen} onClose={() => !isProcessing && setIsShareModalOpen(false)} title="Compartir Pagos">
         <div style={{ marginBottom: '16px', marginTop: '8px' }}>
           <p className="text-body-sm" style={{ color: 'var(--color-on-surface-variant)' }}>
-            Comparte la obligación <strong>{selectedPayment?.title}</strong> con alguien más.
+            Comparte todo el módulo de <strong>Pagos Programados</strong> con alguien más.
           </p>
         </div>
         <form onSubmit={handleSharePayment}>

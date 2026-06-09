@@ -23,6 +23,8 @@ interface Transaction {
   createdAt: any;
   ownerId: string;
   ownerName?: string;
+  recurringPaymentId?: string;
+  recurringPaymentTitle?: string;
 }
 
 interface CustomCategory {
@@ -63,6 +65,15 @@ export default function Finanzas() {
   const [newCatName, setNewCatName] = useState('');
   const [newCatType, setNewCatType] = useState<'income' | 'expense'>('expense');
   const [isAddingCat, setIsAddingCat] = useState(false);
+
+  // Recurring payments state for linking
+  const [recurringPayments, setRecurringPayments] = useState<any[]>([]);
+  const [selectedRecurringPaymentId, setSelectedRecurringPaymentId] = useState('');
+
+  // Delete transaction state
+  const [isDeleteTxModalOpen, setIsDeleteTxModalOpen] = useState(false);
+  const [txToDelete, setTxToDelete] = useState<Transaction | null>(null);
+  const [isDeletingTx, setIsDeletingTx] = useState(false);
 
   const predefinedIncomeCategories = ['Sueldo', 'Venta', 'Transferencia'];
   const predefinedExpenseCategories = ['Supermercado', 'Servicios', 'Alquiler', 'Transporte', 'Ocio', 'Salud', 'Educación'];
@@ -119,10 +130,25 @@ export default function Finanzas() {
       setCustomCategories(data);
     });
 
+    const payRef = collection(db, 'recurringPayments');
+    const qPay = query(
+      payRef,
+      or(
+        where('ownerId', '==', user.uid),
+        where('sharedWith', 'array-contains', user.uid)
+      )
+    );
+    const unsubPay = onSnapshot(qPay, (snapshot) => {
+      const data: any[] = [];
+      snapshot.forEach(doc => data.push({ id: doc.id, ...doc.data() }));
+      setRecurringPayments(data);
+    });
+
     return () => {
       unsubTx();
       unsubSettings();
       unsubCat();
+      unsubPay();
     };
   }, [user]);
 
@@ -136,6 +162,8 @@ export default function Finanzas() {
       // Parse local date (adding time to avoid UTC previous day shift)
       const dateObj = new Date(`${transactionDate}T12:00:00`);
       
+      const selectedPay = recurringPayments.find(p => p.id === selectedRecurringPaymentId);
+      
       await addDoc(collection(db, 'transactions'), {
         type: transactionType,
         amount: parseCOP(amount),
@@ -144,13 +172,16 @@ export default function Finanzas() {
         ownerId: user.uid,
         ownerName: profile?.displayName?.split(' ')[0] || 'Usuario',
         sharedWith: financeSettings?.sharedWith || [],
-        createdAt: Timestamp.fromDate(dateObj)
+        createdAt: Timestamp.fromDate(dateObj),
+        recurringPaymentId: selectedPay ? selectedPay.id : null,
+        recurringPaymentTitle: selectedPay ? selectedPay.title : null
       });
       setIsModalOpen(false);
       setAmount('');
       setCategory('');
       setCustomCategory('');
       setDescription('');
+      setSelectedRecurringPaymentId('');
       setTransactionDate(new Date().toISOString().split('T')[0]);
     } catch (error) {
       console.error('Error adding transaction: ', error);
@@ -163,6 +194,7 @@ export default function Finanzas() {
     setTransactionType(type);
     setCategory('');
     setCustomCategory('');
+    setSelectedRecurringPaymentId('');
     setTransactionDate(new Date().toISOString().split('T')[0]);
     setIsModalOpen(true);
   };
@@ -232,6 +264,20 @@ export default function Finanzas() {
       await deleteDoc(doc(db, 'financeCategories', id));
     } catch (error) {
       console.error(error);
+    }
+  };
+
+  const handleDeleteTransaction = async () => {
+    if (!txToDelete) return;
+    setIsDeletingTx(true);
+    try {
+      await deleteDoc(doc(db, 'transactions', txToDelete.id));
+      setIsDeleteTxModalOpen(false);
+      setTxToDelete(null);
+    } catch (error) {
+      console.error(error);
+    } finally {
+      setIsDeletingTx(false);
     }
   };
 
@@ -370,10 +416,24 @@ export default function Finanzas() {
                       {t.description && ` • ${t.description}`}
                       {t.ownerId !== user.uid && t.ownerName && ` • Por ${t.ownerName}`}
                     </span>
+                    {t.recurringPaymentTitle && (
+                      <span style={{ fontSize: '12px', color: 'var(--color-primary)', marginTop: '2px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        🔗 Pago: {t.recurringPaymentTitle}
+                      </span>
+                    )}
                   </div>
                 </div>
-                <div className={`${styles.transactionAmount} ${t.type === 'income' ? styles.amountIncome : styles.amountExpense}`}>
-                  {t.type === 'income' ? '+' : '-'}{formatCOP(t.amount)}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                  <div className={`${styles.transactionAmount} ${t.type === 'income' ? styles.amountIncome : styles.amountExpense}`}>
+                    {t.type === 'income' ? '+' : '-'}{formatCOP(t.amount)}
+                  </div>
+                  <button 
+                    onClick={() => { setTxToDelete(t); setIsDeleteTxModalOpen(true); }}
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '4px', color: 'var(--color-on-surface-variant)' }}
+                    aria-label="Eliminar transacción"
+                  >
+                    <Trash2 size={18} />
+                  </button>
                 </div>
               </div>
             ))}
@@ -438,6 +498,40 @@ export default function Finanzas() {
               ))}
             </select>
           </div>
+          {transactionType === 'expense' && recurringPayments.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              <label className="text-label-md" style={{ color: 'var(--color-on-surface-variant)' }}>Asociar a Pago Programado (Opcional)</label>
+              <select 
+                value={selectedRecurringPaymentId} 
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setSelectedRecurringPaymentId(val);
+                  if (val) {
+                    const pay = recurringPayments.find(p => p.id === val);
+                    if (pay && pay.amount) {
+                      setAmount(formatInputCOP(String(pay.amount)));
+                    }
+                  }
+                }}
+                style={{
+                  width: '100%',
+                  padding: '12px 16px',
+                  borderRadius: 'var(--radius-md)',
+                  border: '1px solid var(--color-outline)',
+                  backgroundColor: 'var(--color-surface)',
+                  color: 'var(--color-on-surface)',
+                  fontSize: '16px',
+                  outline: 'none',
+                  fontFamily: 'inherit'
+                }}
+              >
+                <option value="">Ninguno</option>
+                {recurringPayments.map(p => (
+                  <option key={p.id} value={p.id}>{p.title}</option>
+                ))}
+              </select>
+            </div>
+          )}
           {category === 'Otro' && (
             <Input 
               label="Escribe tu categoría" 
@@ -493,6 +587,23 @@ export default function Finanzas() {
             </Button>
           </div>
         </form>
+      </Modal>
+
+      {/* Delete Transaction Modal */}
+      <Modal isOpen={isDeleteTxModalOpen} onClose={() => !isDeletingTx && setIsDeleteTxModalOpen(false)} title="Eliminar Movimiento">
+        <div style={{ marginBottom: '24px', marginTop: '8px' }}>
+          <p className="text-body-md" style={{ color: 'var(--color-on-surface-variant)' }}>
+            ¿Estás seguro de que deseas eliminar este movimiento? Se actualizará tu balance automáticamente.
+          </p>
+        </div>
+        <div style={{ display: 'flex', gap: '12px' }}>
+          <Button type="button" variant="ghost" fullWidth onClick={() => setIsDeleteTxModalOpen(false)} disabled={isDeletingTx}>
+            Cancelar
+          </Button>
+          <Button type="button" variant="danger" fullWidth onClick={handleDeleteTransaction} disabled={isDeletingTx}>
+            {isDeletingTx ? 'Eliminando...' : 'Sí, eliminar'}
+          </Button>
+        </div>
       </Modal>
 
       {/* Category Management Modal */}
