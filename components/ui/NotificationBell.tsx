@@ -94,8 +94,10 @@ export function NotificationBell() {
       </button>
 
       {isOpen && (
-        <div className={styles.dropdown}>
-          <div className={styles.header}>
+        <>
+          <div className={styles.backdrop} onClick={() => setIsOpen(false)} />
+          <div className={styles.dropdown}>
+            <div className={styles.header}>
             <h4 className="text-label-lg">Notificaciones</h4>
             {notifications.length > 0 && (
               <button className={styles.markAllRead} onClick={handleMarkAllRead}>
@@ -125,6 +127,7 @@ export function NotificationBell() {
             </ul>
           )}
         </div>
+        </>
       )}
     </div>
   );
