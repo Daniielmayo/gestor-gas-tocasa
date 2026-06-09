@@ -14,17 +14,30 @@ import { UpcomingPaymentCard } from '@/components/ui/UpcomingPaymentCard';
 import { SpeedDial } from '@/components/ui/SpeedDial';
 import { NotificationBell } from '@/components/ui/NotificationBell';
 import { UserEmailAutocomplete } from '@/components/ui/UserEmailAutocomplete';
-import { Plus, Bell, Settings, Receipt, CreditCard, ChevronRight, CheckCircle2, Calendar, LogOut } from 'lucide-react';
+import { useUsersMap } from '@/lib/hooks/useUsersMap';
+import { requestAndSaveNotificationPermission, sendPushNotification } from '@/lib/pushUtils';
+import { Plus, Receipt, Calendar } from 'lucide-react';
 import styles from './dashboard.module.css';
 import { useAuth } from '@/context/AuthContext';
 import { db } from '@/lib/firebase';
-import { collection, query, where, onSnapshot, addDoc, serverTimestamp, or, getDocs, Timestamp } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, orderBy, limit, addDoc, serverTimestamp, or, getDocs, Timestamp } from 'firebase/firestore';
 import { formatCOP } from '@/lib/currency';
 
-interface SharedList {
+interface Transaction {
+  id: string;
+  type: 'ingreso' | 'egreso';
+  amount: number;
+  category: string;
+  date: any;
+  title?: string;
+}
+
+interface Payment {
   id: string;
   title: string;
-  ownerId: string;
+  amount: number;
+  dueDate: any;
+  daysUntil: number;
 }
 
 function getDaysUntil(targetDay: number): number {
@@ -66,6 +79,12 @@ export default function Dashboard() {
       router.push('/login');
     }
   }, [user, loading, router]);
+
+  useEffect(() => {
+    if (user) {
+      requestAndSaveNotificationPermission(user.uid);
+    }
+  }, [user]);
 
   useEffect(() => {
     if (!user) return;
@@ -201,14 +220,21 @@ export default function Dashboard() {
       });
 
       if (sharedWithUids.length > 0) {
+        await sendPushNotification(
+          sharedWithUids, 
+          'Nueva Lista Compartida', 
+          `${profile.displayName || 'Alguien'} ha compartido la lista "${newListName}" contigo.`,
+          `/lista/${docRef.id}`,
+          'list_shared'
+        );
         await addDoc(collection(db, 'notifications'), {
           userId: sharedWithUids[0],
           title: 'Nueva Lista Compartida',
-          message: `${profile.displayName || 'Alguien'} ha compartido la lista '${newListName.trim()}' contigo desde el inicio.`,
-          type: 'list',
-          link: `/lista/${docRef.id}`,
+          message: `${profile.displayName || 'Alguien'} ha compartido la lista "${newListName}" contigo.`,
+          type: 'list_shared',
           read: false,
-          createdAt: Timestamp.now()
+          link: `/lista/${docRef.id}`,
+          createdAt: serverTimestamp()
         });
       }
 

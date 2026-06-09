@@ -10,6 +10,7 @@ import { Modal } from '@/components/ui/Modal';
 import { UserEmailAutocomplete } from '@/components/ui/UserEmailAutocomplete';
 import { useUsersMap } from '@/lib/hooks/useUsersMap';
 import { AvatarGroup } from '@/components/ui/AvatarGroup';
+import { sendPushNotification } from '@/lib/pushUtils';
 import { ArrowLeft, Calendar, Settings, UserPlus, Trash2, Lock, Users } from 'lucide-react';
 import styles from './recurrentes.module.css';
 import { useAuth } from '@/context/AuthContext';

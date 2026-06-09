@@ -12,11 +12,12 @@ import { ArrowLeft, ArrowUpRight, ArrowDownRight, TrendingUp, TrendingDown, Wall
 import styles from './finanzas.module.css';
 import { useAuth } from '@/context/AuthContext';
 import { db } from '@/lib/firebase';
-import { collection, query, where, onSnapshot, addDoc, Timestamp, or, doc, setDoc, arrayUnion, getDocs, deleteDoc, updateDoc, increment } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, addDoc, Timestamp, or, doc, setDoc, arrayUnion, getDocs, deleteDoc, updateDoc, increment, serverTimestamp } from 'firebase/firestore';
 import { formatCOP, formatInputCOP, parseCOP } from '@/lib/currency';
 import { PiggyBank, Plus, Target } from 'lucide-react';
 import { useUsersMap } from '@/lib/hooks/useUsersMap';
 import { AvatarGroup } from '@/components/ui/AvatarGroup';
+import { sendPushNotification } from '@/lib/pushUtils';
 
 interface Transaction {
   id: string;
