@@ -3,34 +3,87 @@
   display: flex;
   flex-direction: column;
   justify-content: center;
-  padding-top: var(--spacing-xl);
-  padding-bottom: var(--spacing-xl);
+  align-items: center;
+  padding: var(--spacing-xl);
+  background: linear-gradient(135deg, #EFF6FF 0%, #DBEAFE 100%);
+  position: relative;
+  overflow: hidden;
+}
+
+.main::before {
+  content: '';
+  position: absolute;
+  width: 500px;
+  height: 500px;
+  background: radial-gradient(circle, rgba(59,130,246,0.15) 0%, rgba(255,255,255,0) 70%);
+  top: -100px;
+  left: -150px;
+  border-radius: 50%;
+  animation: float 8s ease-in-out infinite;
+}
+
+.main::after {
+  content: '';
+  position: absolute;
+  width: 400px;
+  height: 400px;
+  background: radial-gradient(circle, rgba(16,185,129,0.1) 0%, rgba(255,255,255,0) 70%);
+  bottom: -50px;
+  right: -100px;
+  border-radius: 50%;
+  animation: float 10s ease-in-out infinite reverse;
+}
+
+@keyframes float {
+  0% { transform: translateY(0px); }
+  50% { transform: translateY(-20px); }
+  100% { transform: translateY(0px); }
 }
 
 .header {
   text-align: center;
   margin-bottom: var(--spacing-xl);
+  z-index: 1;
 }
 
 .logo {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 80px;
-  height: 80px;
-  background-color: var(--color-surface-container-lowest);
-  border-radius: var(--radius-full);
-  box-shadow: var(--shadow-level-1);
+  width: 88px;
+  height: 88px;
+  background-color: #FFFFFF;
+  border-radius: 24px;
+  box-shadow: 0 10px 30px rgba(59, 130, 246, 0.2);
   margin-bottom: var(--spacing-md);
+  transform: rotate(-5deg);
+  transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+.logo:hover {
+  transform: rotate(0deg) scale(1.05);
 }
 
 .subtitle {
   color: var(--color-on-surface-variant);
   margin-top: var(--spacing-xs);
+  font-weight: 500;
+  max-width: 280px;
+  margin-left: auto;
+  margin-right: auto;
 }
 
 .loginCard {
-  padding: var(--spacing-lg) !important;
+  width: 100%;
+  max-width: 400px;
+  padding: 40px !important;
+  background: rgba(255, 255, 255, 0.85) !important;
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.5) !important;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.08), 0 1px 3px rgba(0,0,0,0.02) !important;
+  border-radius: 28px !important;
+  z-index: 1;
 }
 
 .cardTitle {

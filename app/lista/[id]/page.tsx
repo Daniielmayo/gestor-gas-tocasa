@@ -284,6 +284,57 @@ export default function SharedList({ params }: { params: Promise<{ id: string }>
     );
   }
 
+  const pendingItems = items.filter(i => !i.completed);
+  const completedItems = items.filter(i => i.completed);
+
+  const renderItem = (item: ListItem) => (
+    <div key={item.id} className={`${styles.listItem} ${item.completed ? styles.completedItem : ''}`}>
+      <div className={styles.itemContent} style={{ flex: 1 }}>
+        {editingItemId === item.id ? (
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <input 
+              type="text"
+              value={editItemContent}
+              onChange={(e) => setEditItemContent(e.target.value)}
+              autoFocus
+              style={{ flex: 1, padding: '8px', borderRadius: '4px', border: '1px solid var(--color-outline-variant)', background: 'transparent', color: 'var(--color-on-surface)' }}
+            />
+            <Button variant="ghost" size="sm" onClick={() => handleSaveEditItem(item.id)} style={{ padding: '4px 8px' }}>
+              <CheckCircle2 size={20} color="var(--color-primary)" />
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => setEditingItemId(null)} style={{ padding: '4px 8px' }}>
+              Cancelar
+            </Button>
+          </div>
+        ) : (
+          <>
+            <Checkbox 
+              label={item.content} 
+              checked={item.completed} 
+              onChange={() => toggleItem(item.id, item.completed, item.content)} 
+            />
+            <span className={styles.itemTag}>
+              {item.creatorName} • {item.createdAt ? new Date(item.createdAt.toDate()).toLocaleDateString() : 'Añadiendo...'}
+            </span>
+          </>
+        )}
+      </div>
+      {!editingItemId && (
+        <div style={{ display: 'flex', gap: '4px' }}>
+          <Button variant="ghost" className={styles.iconBtn} onClick={() => {
+            setEditingItemId(item.id);
+            setEditItemContent(item.content);
+          }}>
+            <Pencil size={18} color="var(--color-on-surface-variant)" />
+          </Button>
+          <Button variant="ghost" className={styles.iconBtn} onClick={() => handleDeleteItem(item.id, item.content)}>
+            <Trash2 size={18} color="var(--color-error)" />
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+
   return (
     <main className={`container ${styles.main}`}>
       {/* App Bar */}
@@ -328,53 +379,20 @@ export default function SharedList({ params }: { params: Promise<{ id: string }>
               No hay ítems en esta lista.
             </p>
           ) : (
-            items.map(item => (
-              <div key={item.id} className={`${styles.listItem} ${item.completed ? styles.completedItem : ''}`}>
-                <div className={styles.itemContent} style={{ flex: 1 }}>
-                  {editingItemId === item.id ? (
-                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                      <input 
-                        type="text"
-                        value={editItemContent}
-                        onChange={(e) => setEditItemContent(e.target.value)}
-                        autoFocus
-                        style={{ flex: 1, padding: '8px', borderRadius: '4px', border: '1px solid var(--color-outline-variant)', background: 'transparent', color: 'var(--color-on-surface)' }}
-                      />
-                      <Button variant="ghost" size="sm" onClick={() => handleSaveEditItem(item.id)} style={{ padding: '4px 8px' }}>
-                        <CheckCircle2 size={20} color="var(--color-primary)" />
-                      </Button>
-                      <Button variant="ghost" size="sm" onClick={() => setEditingItemId(null)} style={{ padding: '4px 8px' }}>
-                        Cancelar
-                      </Button>
-                    </div>
-                  ) : (
-                    <>
-                      <Checkbox 
-                        label={item.content} 
-                        checked={item.completed} 
-                        onChange={() => toggleItem(item.id, item.completed, item.content)} 
-                      />
-                      <span className={styles.itemTag}>
-                        {item.creatorName} • {item.createdAt ? new Date(item.createdAt.toDate()).toLocaleDateString() : 'Añadiendo...'}
-                      </span>
-                    </>
-                  )}
-                </div>
-                {!editingItemId && (
-                  <div style={{ display: 'flex', gap: '4px' }}>
-                    <Button variant="ghost" className={styles.iconBtn} onClick={() => {
-                      setEditingItemId(item.id);
-                      setEditItemContent(item.content);
-                    }}>
-                      <Pencil size={18} color="var(--color-on-surface-variant)" />
-                    </Button>
-                    <Button variant="ghost" className={styles.iconBtn} onClick={() => handleDeleteItem(item.id, item.content)}>
-                      <Trash2 size={18} color="var(--color-error)" />
-                    </Button>
+            <>
+              {pendingItems.map(item => renderItem(item))}
+              
+              {completedItems.length > 0 && (
+                <>
+                  <div style={{ padding: '12px 16px', backgroundColor: 'var(--color-surface-container-low)', borderTop: '1px solid var(--color-surface-container-high)', borderBottom: '1px solid var(--color-surface-container-high)' }}>
+                    <h3 className="text-label-md" style={{ color: 'var(--color-on-surface-variant)' }}>
+                      Completados ({completedItems.length})
+                    </h3>
                   </div>
-                )}
-              </div>
-            ))
+                  {completedItems.map(item => renderItem(item))}
+                </>
+              )}
+            </>
           )}
         </Card>
       </section>
