@@ -16,7 +16,7 @@ import { NotificationBell } from '@/components/ui/NotificationBell';
 import { UserEmailAutocomplete } from '@/components/ui/UserEmailAutocomplete';
 import { useUsersMap } from '@/lib/hooks/useUsersMap';
 import { requestAndSaveNotificationPermission, sendPushNotification } from '@/lib/pushUtils';
-import { Plus, Receipt, Calendar } from 'lucide-react';
+import { Plus, Receipt, Calendar, Check } from 'lucide-react';
 import styles from './dashboard.module.css';
 import { useAuth } from '@/context/AuthContext';
 import { db } from '@/lib/firebase';
@@ -65,9 +65,12 @@ export default function Dashboard() {
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
+  const [isSuccessModalOpen, setIsSuccessModalOpen] = useState(false);
+  const [successModalMessage, setSuccessModalMessage] = useState('');
   const [newListName, setNewListName] = useState('');
   const [shareEmail, setShareEmail] = useState('');
   const [isCreatingList, setIsCreatingList] = useState(false);
+  const [paidPaymentIds, setPaidPaymentIds] = useState<Set<string>>(new Set());
 
   const actions = [
     { icon: <Receipt size={20} />, label: 'Nuevo Pago', onClick: () => router.push('/pagos/nuevo') },
@@ -153,6 +156,7 @@ export default function Dashboard() {
     const unsubTx = onSnapshot(qTx, (snapshot) => {
       let currBalance = 0;
       let prevBalance = 0;
+      const paidIds = new Set<string>();
       
       const now = new Date();
       const currentMonth = now.getMonth();
@@ -173,10 +177,18 @@ export default function Dashboard() {
         } else if (m === prevMonth && y === prevYear) {
           prevBalance += (t.type === 'income' ? t.amount : -t.amount);
         }
+
+        if (t.recurringPaymentId && t.createdAt) {
+          const date = t.createdAt.toDate();
+          if (date.getMonth() === currentMonth && date.getFullYear() === currentYear) {
+            paidIds.add(t.recurringPaymentId);
+          }
+        }
       });
       
       setCurrentMonthBalance(currBalance);
       setPrevMonthBalance(prevBalance);
+      setPaidPaymentIds(paidIds);
       setIsLoadingFinances(false);
     });
 
@@ -186,6 +198,33 @@ export default function Dashboard() {
       unsubTx();
     };
   }, [user]);
+
+  const handlePayUpcoming = async (payment: any) => {
+    if (!user || !profile) return;
+    try {
+      const originalId = payment.originalId || payment.id.split('-')[0];
+      await addDoc(collection(db, 'transactions'), {
+        type: 'expense',
+        amount: Number(payment.amount),
+        category: payment.category || 'Otros',
+        title: payment.title,
+        recurringPaymentId: originalId,
+        ownerId: user.uid,
+        sharedWith: payment.sharedWith || [],
+        createdAt: serverTimestamp()
+      });
+
+      import('@/lib/history').then(({ logActivity }) => {
+        logActivity(`<strong>${profile.displayName}</strong> pagó la obligación '${payment.title}' por ${formatCOP(Number(payment.amount))}`, user.uid, payment.sharedWith || []);
+      });
+
+      setSuccessModalMessage('Pago registrado con éxito como egreso.');
+      setIsSuccessModalOpen(true);
+    } catch (error) {
+      console.error(error);
+      alert('Hubo un error al registrar el pago');
+    }
+  };
 
   const handleCreateList = async (e?: FormEvent) => {
     if (e) e.preventDefault();
@@ -343,9 +382,13 @@ export default function Dashboard() {
           </div>
 
           <div className={styles.carouselContainer}>
-            {topPayments.map((payment, i) => (
-              <UpcomingPaymentCard key={payment.id || i} payment={payment} />
-            ))}
+            {topPayments.map((payment, i) => {
+              const originalId = payment.originalId || payment.id.split('-')[0];
+              const isPaid = paidPaymentIds.has(originalId);
+              return (
+                <UpcomingPaymentCard key={payment.id || i} payment={payment} onPay={handlePayUpcoming} isPaid={isPaid} />
+              )
+            })}
           </div>
         </section>
       )}
@@ -458,6 +501,20 @@ export default function Dashboard() {
           </Button>
           <Button variant="ghost" fullWidth onClick={() => setIsProfileModalOpen(false)}>
             Cerrar
+          </Button>
+        </div>
+      </Modal>
+
+      {/* Success Modal */}
+      <Modal isOpen={isSuccessModalOpen} onClose={() => setIsSuccessModalOpen(false)} title="Éxito">
+        <div style={{ textAlign: 'center', padding: '16px 0' }}>
+          <div style={{ width: '64px', height: '64px', borderRadius: '50%', backgroundColor: 'var(--color-success)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>
+            <Check size={32} />
+          </div>
+          <h3 className="text-headline-sm" style={{ marginBottom: '8px' }}>¡Operación exitosa!</h3>
+          <p className="text-body-md" style={{ color: 'var(--color-on-surface-variant)' }}>{successModalMessage}</p>
+          <Button variant="primary" fullWidth onClick={() => setIsSuccessModalOpen(false)} style={{ marginTop: '24px' }}>
+            Aceptar
           </Button>
         </div>
       </Modal>

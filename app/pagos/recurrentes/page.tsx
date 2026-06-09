@@ -11,7 +11,7 @@ import { UserEmailAutocomplete } from '@/components/ui/UserEmailAutocomplete';
 import { useUsersMap } from '@/lib/hooks/useUsersMap';
 import { AvatarGroup } from '@/components/ui/AvatarGroup';
 import { sendPushNotification } from '@/lib/pushUtils';
-import { ArrowLeft, Calendar, Settings, UserPlus, Trash2, Lock, Users } from 'lucide-react';
+import { ArrowLeft, Calendar, Settings, UserPlus, Trash2, Lock, Users, Pencil } from 'lucide-react';
 import styles from './recurrentes.module.css';
 import { useAuth } from '@/context/AuthContext';
 import { db } from '@/lib/firebase';
@@ -55,12 +55,20 @@ export default function RecurringPayments() {
   const [filterVisibility, setFilterVisibility] = useState<'all' | 'personal' | 'shared'>('all');
 
   // Form state
-  const [isShared, setIsShared] = useState(true);
+  const [isShared, setIsShared] = useState(false);
 
   // Modals state
   const [selectedPayment, setSelectedPayment] = useState<Payment | null>(null);
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [editTitle, setEditTitle] = useState('');
+  const [editAmount, setEditAmount] = useState('');
+  const [editCategory, setEditCategory] = useState(PAYMENT_CATEGORIES[0]);
+  const [editSelectedDays, setEditSelectedDays] = useState<number[]>([]);
+  const [editIsShared, setEditIsShared] = useState(true);
+  const [editShareEmail, setEditShareEmail] = useState('');
+
   const [shareEmail, setShareEmail] = useState('');
   const [createShareEmail, setCreateShareEmail] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
@@ -148,6 +156,11 @@ export default function RecurringPayments() {
       return;
     }
 
+    if (isShared && !createShareEmail.trim() && (!paymentsSettings?.sharedWith || paymentsSettings.sharedWith.length === 0)) {
+      alert("Al habilitar la opción de compartir, debes escribir el correo de la persona con la que deseas compartir, o desmarcar la casilla.");
+      return;
+    }
+
     try {
       let currentSharedWith = paymentsSettings?.sharedWith || [];
       if (createShareEmail.trim()) {
@@ -210,6 +223,84 @@ export default function RecurringPayments() {
   const openDeleteModal = (payment: Payment) => {
     setSelectedPayment(payment);
     setIsDeleteModalOpen(true);
+  };
+
+  const openEditModal = (payment: Payment) => {
+    setSelectedPayment(payment);
+    setEditTitle(payment.title);
+    setEditAmount(formatCOP(Number(payment.amount)));
+    setEditCategory(payment.category || PAYMENT_CATEGORIES[0]);
+    setEditSelectedDays(payment.days || []);
+    setEditIsShared(payment.sharedWith && payment.sharedWith.length > 0 ? true : false);
+    setEditShareEmail('');
+    setIsEditModalOpen(true);
+  };
+
+  const toggleEditDay = (day: number) => {
+    setEditSelectedDays(prev => 
+      prev.includes(day) ? prev.filter(d => d !== day) : [...prev, day]
+    );
+  };
+
+  const handleEditPayment = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!selectedPayment || !user || !editTitle.trim() || !editAmount.trim() || editSelectedDays.length === 0) {
+      alert("Por favor completa todos los campos y selecciona al menos un día.");
+      return;
+    }
+
+    if (editIsShared && !editShareEmail.trim() && (!paymentsSettings?.sharedWith || paymentsSettings.sharedWith.length === 0)) {
+      alert("Al habilitar la opción de compartir, debes escribir el correo de la persona con la que deseas compartir, o desmarcar la casilla.");
+      return;
+    }
+
+    setIsProcessing(true);
+    try {
+      const currentSharedWith = paymentsSettings?.sharedWith || [];
+      if (editShareEmail.trim()) {
+        const usersRef = collection(db, 'users');
+        const q = query(usersRef, where('email', '==', editShareEmail.trim().toLowerCase()));
+        const snap = await getDocs(q);
+        if (!snap.empty) {
+          const friendUid = snap.docs[0].data().uid;
+          if (friendUid !== user.uid) {
+            const settingsRef = doc(db, 'paymentsSettings', user.uid);
+            await setDoc(settingsRef, { sharedWith: arrayUnion(friendUid) }, { merge: true });
+            currentSharedWith.push(friendUid);
+            if (!(paymentsSettings?.sharedWith || []).includes(friendUid)) {
+              await addDoc(collection(db, 'notifications'), {
+                userId: friendUid,
+                title: 'Pagos Compartidos',
+                message: `${profile?.displayName || 'Alguien'} ha compartido sus pagos contigo al editar un pago recurrente.`,
+                type: 'payment',
+                link: '/pagos/recurrentes',
+                read: false,
+                createdAt: Timestamp.now()
+              });
+            }
+          }
+        }
+      }
+
+      const uniqueSharedWith = [...new Set(currentSharedWith)];
+
+      const updatedData = {
+        title: editTitle.trim(),
+        amount: parseCOP(editAmount),
+        days: editSelectedDays.sort((a,b) => a - b),
+        category: editCategory,
+        sharedWith: editIsShared && uniqueSharedWith ? uniqueSharedWith : [],
+      };
+
+      await updateDoc(doc(db, 'recurringPayments', selectedPayment.id), updatedData);
+      
+      setIsEditModalOpen(false);
+    } catch (error) {
+      console.error(error);
+      alert("Error al actualizar el pago");
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
   const handleSharePayment = async (e: FormEvent) => {
@@ -384,29 +475,35 @@ export default function RecurringPayments() {
             </div>
           </div>
 
-          {paymentsSettings?.sharedWith?.length > 0 && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '8px' }}>
-              <input 
-                type="checkbox" 
-                id="sharePayment" 
-                checked={isShared} 
-                onChange={(e) => setIsShared(e.target.checked)} 
-                style={{ width: '18px', height: '18px' }}
-              />
-              <label htmlFor="sharePayment" className="text-body-md" style={{ color: 'var(--color-on-surface)' }}>
-                Compartir este pago con mis colaboradores
-              </label>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '16px' }}>
+            <input 
+              type="checkbox" 
+              id="sharePayment" 
+              checked={isShared} 
+              onChange={(e) => setIsShared(e.target.checked)} 
+              style={{ width: '18px', height: '18px' }}
+            />
+            <label htmlFor="sharePayment" className="text-body-md" style={{ color: 'var(--color-on-surface)' }}>
+              Compartir este pago
+            </label>
+          </div>
+
+          {isShared && (
+            <div style={{ marginTop: '8px', marginBottom: '8px' }}>
+              <UserEmailAutocomplete value={createShareEmail} onChange={setCreateShareEmail} />
+              {paymentsSettings?.sharedWith?.length > 0 ? (
+                <p className="text-label-sm" style={{ color: 'var(--color-primary)', marginTop: '8px' }}>
+                  Ya compartes pagos con {paymentsSettings.sharedWith.length} persona(s). Escribe un correo solo si quieres añadir a alguien nuevo.
+                </p>
+              ) : (
+                <p className="text-label-sm" style={{ color: 'var(--color-warning)', marginTop: '8px' }}>
+                  Requerido: Escribe el correo del usuario con quien deseas compartir.
+                </p>
+              )}
             </div>
           )}
 
-          <div style={{ marginTop: '8px' }}>
-            <UserEmailAutocomplete value={createShareEmail} onChange={setCreateShareEmail} />
-            <p className="text-label-sm" style={{ color: 'var(--color-on-surface-variant)', marginTop: '8px' }}>
-              Opcional: Comparte tu módulo de pagos.
-            </p>
-          </div>
-
-          <Button type="submit" variant="primary" style={{ marginTop: '8px' }}>
+          <Button type="submit" variant="primary" style={{ marginTop: '16px' }}>
             Guardar Pago Programado
           </Button>
         </form>
@@ -522,11 +619,16 @@ export default function RecurringPayments() {
                         </span>
                       </div>
                     </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    <div style={{ display: 'flex', flexDirection: 'row', gap: '8px' }}>
                       {payment.ownerId === user?.uid && (
-                        <Button variant="ghost" onClick={() => openDeleteModal(payment)} aria-label="Eliminar" style={{ padding: '8px', height: 'auto', minWidth: 'auto' }}>
-                          <Trash2 size={20} color="var(--color-error)" />
-                        </Button>
+                        <>
+                          <Button variant="ghost" onClick={() => openEditModal(payment)} aria-label="Editar" style={{ padding: '8px', height: 'auto', minWidth: 'auto' }}>
+                            <Pencil size={20} color="var(--color-primary)" />
+                          </Button>
+                          <Button variant="ghost" onClick={() => openDeleteModal(payment)} aria-label="Eliminar" style={{ padding: '8px', height: 'auto', minWidth: 'auto' }}>
+                            <Trash2 size={20} color="var(--color-error)" />
+                          </Button>
+                        </>
                       )}
                     </div>
                   </Card>
@@ -578,6 +680,110 @@ export default function RecurringPayments() {
             {isProcessing ? 'Eliminando...' : 'Sí, eliminar'}
           </Button>
         </div>
+      </Modal>
+
+      {/* Edit Modal */}
+      <Modal isOpen={isEditModalOpen} onClose={() => !isProcessing && setIsEditModalOpen(false)} title="Editar Pago Programado">
+        <form onSubmit={handleEditPayment} style={{ marginTop: '8px' }}>
+          <div style={{ marginBottom: '16px' }}>
+            <Input 
+              label="Nombre del Pago" 
+              placeholder="Ej. Arriendo, Servicios..." 
+              value={editTitle}
+              onChange={(e) => setEditTitle(e.target.value)}
+            />
+          </div>
+          <div style={{ marginBottom: '16px' }}>
+            <Input 
+              label="Monto" 
+              placeholder="Ej. 1.500.000" 
+              type="text"
+              value={editAmount}
+              onChange={(e) => setEditAmount(formatInputCOP(e.target.value))}
+              required
+            />
+          </div>
+          
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '16px' }}>
+            <label className="text-label-md" style={{ color: 'var(--color-on-surface)' }}>
+              Categoría
+            </label>
+            <select 
+              value={editCategory} 
+              onChange={(e) => setEditCategory(e.target.value)}
+              style={{
+                width: '100%',
+                padding: '12px 16px',
+                borderRadius: '12px',
+                border: '1px solid var(--color-outline-variant)',
+                backgroundColor: 'var(--color-surface-container-lowest)',
+                color: 'var(--color-on-surface)',
+                fontFamily: 'inherit',
+                fontSize: '16px',
+                appearance: 'none',
+              }}
+            >
+              {PAYMENT_CATEGORIES.map(cat => (
+                <option key={cat} value={cat}>{cat}</option>
+              ))}
+            </select>
+          </div>
+          
+          <div className={styles.frequencyGroup} style={{ marginBottom: '16px' }}>
+            <label className="text-label-md" style={{ color: 'var(--color-on-surface)' }}>
+              Días de Cobro (Se repetirá cada mes)
+            </label>
+            <div className={styles.dayGrid}>
+              {days.map(day => (
+                <button
+                  key={day}
+                  type="button"
+                  className={`${styles.dayButton} ${editSelectedDays.includes(day) ? styles.daySelected : ''}`}
+                  onClick={() => toggleEditDay(day)}
+                >
+                  {day}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
+            <input 
+              type="checkbox" 
+              id="editSharePayment" 
+              checked={editIsShared} 
+              onChange={(e) => setEditIsShared(e.target.checked)} 
+              style={{ width: '18px', height: '18px' }}
+            />
+            <label htmlFor="editSharePayment" className="text-body-md" style={{ color: 'var(--color-on-surface)' }}>
+              Compartir este pago
+            </label>
+          </div>
+
+          {editIsShared && (
+            <div style={{ marginTop: '8px', marginBottom: '24px' }}>
+              <UserEmailAutocomplete value={editShareEmail} onChange={setEditShareEmail} />
+              {paymentsSettings?.sharedWith?.length > 0 ? (
+                <p className="text-label-sm" style={{ color: 'var(--color-primary)', marginTop: '8px' }}>
+                  Ya compartes pagos con {paymentsSettings.sharedWith.length} persona(s). Escribe un correo solo si quieres añadir a alguien nuevo.
+                </p>
+              ) : (
+                <p className="text-label-sm" style={{ color: 'var(--color-warning)', marginTop: '8px' }}>
+                  Requerido: Escribe el correo del usuario con quien deseas compartir.
+                </p>
+              )}
+            </div>
+          )}
+
+          <div style={{ display: 'flex', gap: '12px' }}>
+            <Button type="button" variant="ghost" fullWidth onClick={() => setIsEditModalOpen(false)} disabled={isProcessing}>
+              Cancelar
+            </Button>
+            <Button type="submit" variant="primary" fullWidth disabled={isProcessing || !editTitle.trim() || !editAmount.trim()}>
+              {isProcessing ? 'Guardando...' : 'Guardar Cambios'}
+            </Button>
+          </div>
+        </form>
       </Modal>
     </main>
   );

@@ -7,9 +7,11 @@ import { useUsersMap } from '@/lib/hooks/useUsersMap';
 
 interface UpcomingPaymentCardProps {
   payment: any;
+  onPay?: (payment: any) => void;
+  isPaid?: boolean;
 }
 
-export function UpcomingPaymentCard({ payment }: UpcomingPaymentCardProps) {
+export function UpcomingPaymentCard({ payment, onPay, isPaid }: UpcomingPaymentCardProps) {
   const { usersMap } = useUsersMap();
   const isUrgent = payment.daysUntil <= 3;
   
@@ -71,9 +73,15 @@ export function UpcomingPaymentCard({ payment }: UpcomingPaymentCardProps) {
           />
         </div>
         
-        <Button variant="primary" size="sm" style={{ padding: '8px 16px', borderRadius: '24px' }}>
-          Pagar ahora
-        </Button>
+        {isPaid ? (
+          <Button variant="ghost" size="sm" style={{ padding: '8px 16px', borderRadius: '24px', backgroundColor: 'var(--color-success)', color: 'white' }} disabled>
+            Pagado
+          </Button>
+        ) : (
+          <Button variant="primary" size="sm" style={{ padding: '8px 16px', borderRadius: '24px' }} onClick={() => onPay?.(payment)}>
+            Pagar ahora
+          </Button>
+        )}
       </div>
     </Card>
   );
