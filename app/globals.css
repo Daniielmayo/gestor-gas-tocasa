@@ -1,26 +1,108 @@
-@import "tailwindcss";
-
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Colors */
+  --color-primary: #3B82F6; /* Action Indigo */
+  --color-primary-dark: #2563EB;
+  --color-primary-container: #EFF6FF;
+  
+  --color-surface: #F8F9FB;
+  --color-surface-dim: #D9DADC;
+  --color-surface-bright: #F8F9FB;
+  --color-surface-container-lowest: #FFFFFF;
+  --color-surface-container-low: #F3F4F6; /* Soft Gray */
+  --color-surface-container: #EDEEF0;
+  --color-surface-container-high: #E7E8EA;
+  
+  --color-on-surface: #1F2937; /* Dark Slate */
+  --color-on-surface-variant: #424754;
+  --color-outline: #727785;
+  --color-outline-variant: #D1D5DB; /* Unchecked Toggle / Divider */
+  
+  --color-success: #10B981;
+  --color-warning: #F59E0B;
+  --color-error: #EF4444;
+  
+  --color-inverse-surface: #2E3132;
+  --color-inverse-on-surface: #F0F1F3;
+
+  /* Typography */
+  --font-family-base: var(--font-inter), sans-serif;
+  
+  /* Layout & Spacing */
+  --spacing-base: 4px;
+  --spacing-xs: 8px;
+  --spacing-sm: 12px;
+  --spacing-md: 16px;
+  --spacing-lg: 24px;
+  --spacing-xl: 32px;
+  
+  --container-margin: 16px;
+  --gutter: 12px;
+
+  /* Radii */
+  --radius-sm: 4px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-full: 9999px;
+
+  /* Elevations */
+  --shadow-level-1: 0px 2px 8px rgba(31, 41, 55, 0.05);
+  --shadow-level-2: 0px 8px 20px rgba(59, 130, 246, 0.2);
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-family-base);
+  background-color: var(--color-surface);
+  color: var(--color-on-surface);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  color: var(--color-on-surface);
+  margin: 0;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button {
+  font-family: inherit;
+  border: none;
+  cursor: pointer;
+  background: none;
+}
+
+input {
+  font-family: inherit;
+}
+
+/* Typographic Utility Classes */
+.text-display-lg { font-size: 32px; font-weight: 700; line-height: 40px; letter-spacing: -0.02em; }
+.text-headline-md { font-size: 24px; font-weight: 600; line-height: 32px; letter-spacing: -0.01em; }
+.text-headline-sm { font-size: 20px; font-weight: 600; line-height: 28px; }
+.text-body-lg { font-size: 16px; font-weight: 400; line-height: 24px; }
+.text-body-md { font-size: 14px; font-weight: 400; line-height: 20px; }
+.text-label-md { font-size: 12px; font-weight: 600; line-height: 16px; letter-spacing: 0.05em; text-transform: uppercase; }
+.text-label-sm { font-size: 11px; font-weight: 500; line-height: 14px; }
+
+/* Structural Utility Classes */
+.container {
+  padding-left: var(--container-margin);
+  padding-right: var(--container-margin);
+  margin-left: auto;
+  margin-right: auto;
+  max-width: 600px; /* Mobile first, capped for desktop viewing */
+}
+
+/* Interactive Utility Classes */
+.card-interactive:active {
+  background-color: var(--color-surface-container-low);
 }

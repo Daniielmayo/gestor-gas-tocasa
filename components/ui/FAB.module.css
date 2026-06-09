@@ -1,0 +1,32 @@
+.fab {
+  position: fixed;
+  bottom: 88px; /* 64px (nav) + 24px */
+  right: 24px;
+  width: 56px;
+  height: 56px;
+  border-radius: var(--radius-full);
+  background-color: var(--color-primary);
+  color: #FFFFFF;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: var(--shadow-level-2);
+  transition: transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
+  z-index: 50; /* Above normal content */
+}
+
+.fab:hover {
+  transform: scale(1.05);
+  box-shadow: 0px 12px 24px rgba(59, 130, 246, 0.3);
+}
+
+.fab:active {
+  transform: scale(0.95);
+}
+
+@supports (padding-bottom: env(safe-area-inset-bottom)) {
+  .fab {
+    bottom: calc(88px + env(safe-area-inset-bottom));
+  }
+}
+

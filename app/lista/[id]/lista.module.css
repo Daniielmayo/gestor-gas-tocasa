@@ -1,0 +1,138 @@
+.main {
+  padding-top: var(--spacing-md);
+  padding-bottom: 100px; /* Space for bottom input */
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-lg);
+}
+
+.appBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.titleContainer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.avatarGroup {
+  display: flex;
+  align-items: center;
+  margin-top: 4px;
+}
+
+.smallAvatar {
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-full);
+  background-color: var(--color-primary-container);
+  color: var(--color-primary-dark);
+  font-size: 10px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid var(--color-surface);
+  margin-left: -8px;
+}
+
+.smallAvatar:first-child {
+  margin-left: 0;
+}
+
+.iconBtn {
+  padding: var(--spacing-xs);
+  color: var(--color-on-surface);
+}
+
+.itemsSection {
+  display: flex;
+  flex-direction: column;
+}
+
+.listCard {
+  padding: 0 !important;
+}
+
+.listItem {
+  display: flex;
+  align-items: center;
+  padding: var(--spacing-md);
+  border-bottom: 1px solid var(--color-surface-container-high);
+}
+
+.listItem:last-child {
+  border-bottom: none;
+}
+
+.completedItem {
+  background-color: var(--color-surface-container-low);
+  opacity: 0.8;
+}
+
+.itemContent {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.itemTag {
+  font-size: 10px;
+  color: var(--color-on-surface-variant);
+  margin-left: 28px; /* Alignment with checkbox label */
+}
+
+/* Fixed Bottom Input */
+.bottomInputContainer {
+  position: fixed;
+  bottom: 64px; /* Above BottomNav */
+  left: 0;
+  right: 0;
+  background-color: var(--color-surface);
+  padding: var(--spacing-md) var(--spacing-lg);
+  border-top: 1px solid var(--color-surface-container-high);
+  display: flex;
+  justify-content: center;
+  z-index: 10;
+}
+
+@supports (padding-bottom: env(safe-area-inset-bottom)) {
+  .bottomInputContainer {
+    padding-bottom: calc(var(--spacing-md) + env(safe-area-inset-bottom));
+  }
+}
+
+
+.inputWrapper {
+  width: 100%;
+  max-width: 600px;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  background-color: var(--color-surface-container-lowest);
+  border-radius: var(--radius-full);
+  padding: 4px;
+  border: 1px solid var(--color-outline-variant);
+}
+
+.bottomInput {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  padding: 8px 16px;
+  font-size: 14px;
+  color: var(--color-on-surface);
+}
+
+.sendBtn {
+  border-radius: var(--radius-full);
+  width: 36px;
+  height: 36px;
+  padding: 0;
+}
+

@@ -1,0 +1,69 @@
+.bottomNav {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background-color: var(--color-surface-container-lowest);
+  border-top: 1px solid var(--color-surface-container-high);
+  z-index: 40; /* Just below FAB which is 50 */
+  box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.05);
+}
+
+@supports (padding-bottom: env(safe-area-inset-bottom)) {
+  .bottomNav {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+}
+
+.navContainer {
+  display: flex;
+  justify-content: space-around;
+  align-items: center;
+  height: 64px;
+  max-width: 600px;
+  margin: 0 auto;
+}
+
+.navItem {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  flex: 1;
+  height: 100%;
+  color: var(--color-on-surface-variant);
+  text-decoration: none;
+  transition: color 0.2s;
+}
+
+.iconWrapper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 32px;
+  border-radius: var(--radius-full);
+  transition: background-color 0.2s;
+}
+
+.navLabel {
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.active {
+  color: var(--color-primary);
+}
+
+.active .iconWrapper {
+  background-color: var(--color-primary-container);
+}
+
+.navItem:active .iconWrapper {
+  background-color: var(--color-surface-container);
+}
+
+.active:active .iconWrapper {
+  background-color: var(--color-primary-container);
+}
