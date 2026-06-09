@@ -4,6 +4,7 @@ import { Button } from './Button';
 import { AlertCircle, Clock } from 'lucide-react';
 import { AvatarGroup } from './AvatarGroup';
 import { useUsersMap } from '@/lib/hooks/useUsersMap';
+import { formatCOP } from '@/lib/currency';
 
 interface UpcomingPaymentCardProps {
   payment: any;
@@ -49,7 +50,7 @@ export function UpcomingPaymentCard({ payment, onPay, isPaid }: UpcomingPaymentC
           </span>
         </div>
         <div style={{ fontSize: '18px', fontWeight: 700, color: 'var(--color-on-surface)' }}>
-          ${payment.amount}
+          {formatCOP(Number(payment.amount))}
         </div>
       </div>
       
