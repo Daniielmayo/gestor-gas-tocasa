@@ -12,6 +12,13 @@ const inter = Inter({
 export const metadata: Metadata = {
   title: "Gestión de Gastos",
   description: "Sistema colaborativo de listas y pagos compartidos",
+  manifest: "/manifest.json",
+  themeColor: "#ffffff",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "default",
+    title: "Gastos Casa",
+  },
 };
 
 export default function RootLayout({

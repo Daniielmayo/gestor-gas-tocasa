@@ -11,7 +11,7 @@ import { ArrowLeft, Calendar, Settings, UserPlus, Trash2, Lock, Users } from 'lu
 import styles from './recurrentes.module.css';
 import { useAuth } from '@/context/AuthContext';
 import { db } from '@/lib/firebase';
-import { collection, query, where, onSnapshot, addDoc, serverTimestamp, or, doc, updateDoc, deleteDoc, getDocs, arrayUnion, setDoc } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, addDoc, serverTimestamp, or, doc, updateDoc, deleteDoc, getDocs, arrayUnion, setDoc, Timestamp } from 'firebase/firestore';
 import { formatCOP, formatInputCOP, parseCOP } from '@/lib/currency';
 
 interface Payment {
@@ -46,6 +46,7 @@ export default function RecurringPayments() {
   const [shareEmail, setShareEmail] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [paymentsSettings, setPaymentsSettings] = useState<any>(null);
+  const [paidPaymentIds, setPaidPaymentIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     if (!loading && !user) {
@@ -82,9 +83,36 @@ export default function RecurringPayments() {
       }
     });
 
+    const txRef = collection(db, 'transactions');
+    const qTx = query(
+      txRef,
+      or(
+        where('ownerId', '==', user.uid),
+        where('sharedWith', 'array-contains', user.uid)
+      )
+    );
+    const unsubTx = onSnapshot(qTx, (snapshot) => {
+      const now = new Date();
+      const currentMonth = now.getMonth();
+      const currentYear = now.getFullYear();
+      
+      const paidIds = new Set<string>();
+      snapshot.forEach(docSnap => {
+        const data = docSnap.data();
+        if (data.recurringPaymentId && data.createdAt) {
+          const date = data.createdAt.toDate();
+          if (date.getMonth() === currentMonth && date.getFullYear() === currentYear) {
+            paidIds.add(data.recurringPaymentId);
+          }
+        }
+      });
+      setPaidPaymentIds(paidIds);
+    });
+
     return () => {
       unsubscribe();
       unsubSettings();
+      unsubTx();
     };
   }, [user]);
 
@@ -346,19 +374,36 @@ export default function RecurringPayments() {
                 <Calendar size={24} color="var(--color-primary)" />
               </div>
               <div className={styles.paymentInfo} style={{ flex: 1 }}>
-                <h3 className="text-body-lg" style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  {payment.title}
-                  {payment.ownerId !== user.uid || (payment.sharedWith && payment.sharedWith.length > 0) ? (
-                    <Users size={16} color="var(--color-primary)" />
-                  ) : (
-                    <Lock size={16} color="var(--color-on-surface-variant)" />
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <h3 className="text-body-lg" style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    {payment.title}
+                    {payment.ownerId !== user.uid || (payment.sharedWith && payment.sharedWith.length > 0) ? (
+                      <Users size={16} color="var(--color-primary)" />
+                    ) : (
+                      <Lock size={16} color="var(--color-on-surface-variant)" />
+                    )}
+                  </h3>
+                  {paidPaymentIds.has(payment.id) && (
+                    <span style={{ 
+                      fontSize: '12px', 
+                      backgroundColor: 'var(--color-success)', 
+                      color: '#FFFFFF', 
+                      padding: '2px 8px', 
+                      borderRadius: '12px',
+                      fontWeight: 500,
+                      whiteSpace: 'nowrap'
+                    }}>
+                      ✅ Pagado
+                    </span>
                   )}
-                </h3>
+                </div>
                 <p className="text-label-sm" style={{ color: 'var(--color-warning)' }}>
                   Se cobra los días: {payment.days.sort((a,b) => a - b).join(', ')} de cada mes
                 </p>
                 <div style={{ marginTop: '4px' }}>
-                  <span className="text-headline-sm">{formatCOP(Number(payment.amount))}</span>
+                  <span className="text-headline-sm" style={{ color: paidPaymentIds.has(payment.id) ? 'var(--color-success)' : 'inherit' }}>
+                    {formatCOP(Number(payment.amount))}
+                  </span>
                 </div>
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
