@@ -1,0 +1,101 @@
+.main {
+  padding-top: var(--spacing-lg);
+  padding-bottom: 88px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-lg);
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  background-color: var(--color-surface);
+  margin-top: calc(-1 * var(--spacing-lg));
+  padding-top: var(--spacing-lg);
+  padding-bottom: var(--spacing-sm);
+}
+
+.iconBtn {
+  padding: var(--spacing-xs);
+  color: var(--color-on-surface-variant);
+}
+
+.sectionTitle {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--color-on-surface);
+}
+
+.debtsSection {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+}
+
+.emptyDebts {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-xl) 0;
+  background: var(--color-surface-container-low);
+  border-radius: var(--radius-md);
+  border: 1px dashed var(--color-outline-variant);
+}
+
+.debtsList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+}
+
+.debtCard {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: var(--spacing-md);
+  background: var(--color-surface-container-lowest);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-level-1);
+  cursor: pointer;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.debtCard:active {
+  transform: scale(0.98);
+}
+
+.debtHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.debtProgressBg {
+  width: 100%;
+  height: 8px;
+  background-color: var(--color-surface-container-high);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.debtProgressFill {
+  height: 100%;
+  background-color: var(--color-error); /* Red/Orange for debts */
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.debtProgressFillDone {
+  background-color: #10B981; /* Green when fully paid */
+}
+
+.debtAmounts {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}

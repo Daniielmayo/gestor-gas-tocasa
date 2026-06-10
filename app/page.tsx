@@ -20,7 +20,7 @@ import { Plus, Receipt, Calendar, Check } from 'lucide-react';
 import styles from './dashboard.module.css';
 import { useAuth } from '@/context/AuthContext';
 import { db } from '@/lib/firebase';
-import { collection, query, where, onSnapshot, orderBy, limit, addDoc, serverTimestamp, or, getDocs, Timestamp } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, orderBy, limit, addDoc, serverTimestamp, or, getDocs, Timestamp, updateDoc, doc, increment } from 'firebase/firestore';
 import { formatCOP } from '@/lib/currency';
 
 interface Transaction {
@@ -218,7 +218,24 @@ export default function Dashboard() {
         logActivity(`<strong>${profile.displayName}</strong> pagó la obligación '${payment.title}' por ${formatCOP(Number(payment.amount))}`, user.uid, payment.sharedWith || []);
       });
 
-      setSuccessModalMessage('Pago registrado con éxito como egreso.');
+      // Check if there's a debt linked to this recurring payment
+      const debtsRef = collection(db, 'debts');
+      const qDebts = query(debtsRef, where('linkedRecurringPaymentId', '==', originalId));
+      const debtSnap = await getDocs(qDebts);
+      
+      if (!debtSnap.empty) {
+        // Increment currentAmount for linked debts (usually just one)
+        const updatePromises = debtSnap.docs.map(debtDoc => {
+          return updateDoc(doc(db, 'debts', debtDoc.id), {
+            currentAmount: increment(Number(payment.amount))
+          });
+        });
+        await Promise.all(updatePromises);
+        setSuccessModalMessage('Pago registrado con éxito y deducido automáticamente de tu deuda ligada.');
+      } else {
+        setSuccessModalMessage('Pago registrado con éxito como egreso.');
+      }
+      
       setIsSuccessModalOpen(true);
     } catch (error) {
       console.error(error);

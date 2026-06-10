@@ -37,8 +37,13 @@ const PAYMENT_CATEGORIES = [
   'Educación',
   'Transporte',
   'Tarjetas / Créditos',
-  'Otros'
 ];
+
+interface CustomCategory {
+  id: string;
+  name: string;
+  type: 'payment';
+}
 
 export default function RecurringPayments() {
   const { user, profile, loading } = useAuth();
@@ -77,6 +82,13 @@ export default function RecurringPayments() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [paymentsSettings, setPaymentsSettings] = useState<any>(null);
   const [paidPaymentIds, setPaidPaymentIds] = useState<Set<string>>(new Set());
+
+  // Custom Categories state
+  const [customCategories, setCustomCategories] = useState<CustomCategory[]>([]);
+  const [isCategoriesModalOpen, setIsCategoriesModalOpen] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState('');
+
+  const combinedCategories = [...PAYMENT_CATEGORIES, ...customCategories.map(c => c.name), 'Otro'];
 
   useEffect(() => {
     if (!loading && !user) {
@@ -122,27 +134,36 @@ export default function RecurringPayments() {
       )
     );
     const unsubTx = onSnapshot(qTx, (snapshot) => {
+      const paidIds = new Set<string>();
       const now = new Date();
       const currentMonth = now.getMonth();
       const currentYear = now.getFullYear();
-      
-      const paidIds = new Set<string>();
-      snapshot.forEach(docSnap => {
-        const data = docSnap.data();
-        if (data.recurringPaymentId && data.createdAt) {
-          const date = data.createdAt.toDate();
+
+      snapshot.forEach(doc => {
+        const t = doc.data();
+        if (t.recurringPaymentId && t.createdAt) {
+          const date = t.createdAt.toDate();
           if (date.getMonth() === currentMonth && date.getFullYear() === currentYear) {
-            paidIds.add(data.recurringPaymentId);
+            paidIds.add(t.recurringPaymentId);
           }
         }
       });
       setPaidPaymentIds(paidIds);
     });
 
+    const catRef = collection(db, 'financeCategories');
+    const qCat = query(catRef, where('ownerId', '==', user.uid), where('type', '==', 'payment'));
+    const unsubCat = onSnapshot(qCat, (snapshot) => {
+      const data: CustomCategory[] = [];
+      snapshot.forEach(doc => data.push({ id: doc.id, ...doc.data() } as CustomCategory));
+      setCustomCategories(data);
+    });
+
     return () => {
       unsubscribe();
       unsubSettings();
       unsubTx();
+      unsubCat();
     };
   }, [user]);
 
@@ -211,7 +232,7 @@ export default function RecurringPayments() {
       setTitle('');
       setAmount('');
       setSelectedDays([]);
-      setCategory(PAYMENT_CATEGORIES[0]);
+      setCategory(combinedCategories[0] || PAYMENT_CATEGORIES[0]);
       setDescription('');
       setIsShared(true);
       setCreateShareEmail('');
@@ -234,7 +255,7 @@ export default function RecurringPayments() {
     setSelectedPayment(payment);
     setEditTitle(payment.title);
     setEditAmount(formatCOP(Number(payment.amount)));
-    setEditCategory(payment.category || PAYMENT_CATEGORIES[0]);
+    setEditCategory(payment.category || combinedCategories[0] || PAYMENT_CATEGORIES[0]);
     setEditDescription(payment.description || '');
     setEditSelectedDays(payment.days || []);
     setEditIsShared(payment.sharedWith && payment.sharedWith.length > 0 ? true : false);
@@ -383,6 +404,29 @@ export default function RecurringPayments() {
 
   const days = Array.from({ length: 31 }, (_, i) => i + 1);
 
+  const handleAddCategory = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newCategoryName.trim() || !user) return;
+    try {
+      await addDoc(collection(db, 'financeCategories'), {
+        name: newCategoryName.trim(),
+        type: 'payment',
+        ownerId: user.uid
+      });
+      setNewCategoryName('');
+    } catch (error) {
+      console.error(error);
+    }
+  };
+
+  const handleDeleteCategory = async (id: string) => {
+    try {
+      await deleteDoc(doc(db, 'financeCategories', id));
+    } catch (error) {
+      console.error(error);
+    }
+  };
+
   if (loading || !user) {
     return (
       <main className={`container ${styles.main}`}>
@@ -439,29 +483,33 @@ export default function RecurringPayments() {
             required
           />
           
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            <label className="text-label-md" style={{ color: 'var(--color-on-surface)' }}>
-              Categoría
-            </label>
-            <select 
-              value={category} 
-              onChange={(e) => setCategory(e.target.value)}
-              style={{
-                width: '100%',
-                padding: '12px 16px',
-                borderRadius: '12px',
-                border: '1px solid var(--color-outline-variant)',
-                backgroundColor: 'var(--color-surface-container-lowest)',
-                color: 'var(--color-on-surface)',
-                fontFamily: 'inherit',
-                fontSize: '16px',
-                appearance: 'none',
-              }}
-            >
-              {PAYMENT_CATEGORIES.map(cat => (
-                <option key={cat} value={cat}>{cat}</option>
-              ))}
-            </select>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-end' }}>
+            <div style={{ flex: 1 }}>
+              <label className="text-label-md" style={{ color: 'var(--color-on-surface)' }}>Categoría</label>
+              <select 
+                value={category} 
+                onChange={(e) => setCategory(e.target.value)}
+                style={{
+                  width: '100%',
+                  padding: '12px 16px',
+                  borderRadius: '12px',
+                  border: '1px solid var(--color-outline-variant)',
+                  backgroundColor: 'var(--color-surface-container-lowest)',
+                  color: 'var(--color-on-surface)',
+                  fontFamily: 'inherit',
+                  fontSize: '16px',
+                  appearance: 'none',
+                  marginTop: '4px'
+                }}
+              >
+                {combinedCategories.map(cat => (
+                  <option key={cat} value={cat}>{cat}</option>
+                ))}
+              </select>
+            </div>
+            <Button variant="secondary" className={styles.iconBtn} onClick={() => setIsCategoriesModalOpen(true)} type="button" aria-label="Gestionar categorías">
+              <Settings size={20} />
+            </Button>
           </div>
 
           <Input 
@@ -524,8 +572,25 @@ export default function RecurringPayments() {
       </Card>
 
       {/* Lista de Obligaciones */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginTop: '16px' }}>
         <h2 className="text-headline-sm">Tus Obligaciones</h2>
+        {payments.length > 0 && (
+          <div style={{ textAlign: 'right' }}>
+            <p className="text-label-sm" style={{ color: 'var(--color-on-surface-variant)' }}>Total {filterVisibility === 'all' ? '' : filterVisibility === 'personal' ? 'Personal' : 'Compartido'}</p>
+            <p className="text-headline-sm" style={{ color: 'var(--color-primary)' }}>
+              {formatCOP(
+                payments
+                  .filter(p => {
+                    if (filterVisibility === 'personal') return p.ownerId === user.uid && (!p.sharedWith || p.sharedWith.length === 0);
+                    if (filterVisibility === 'shared') return p.ownerId !== user.uid || (p.sharedWith && p.sharedWith.length > 0);
+                    return true;
+                  })
+                  .filter(p => filterDay === 'all' ? true : p.days.includes(filterDay))
+                  .reduce((sum, p) => sum + (Number(p.amount) * (filterDay === 'all' ? p.days.length : 1)), 0)
+              )}
+            </p>
+          </div>
+        )}
       </div>
 
       <div style={{ display: 'flex', gap: '8px', marginTop: '16px', overflowX: 'auto', paddingBottom: '8px' }}>
@@ -634,8 +699,13 @@ export default function RecurringPayments() {
                       )}
                       <div style={{ marginTop: '4px' }}>
                         <span className="text-headline-sm" style={{ color: paidPaymentIds.has(payment.id) ? 'var(--color-success)' : 'inherit' }}>
-                          {formatCOP(Number(payment.amount))}
+                          {formatCOP(Number(payment.amount) * (filterDay === 'all' ? payment.days.length : 1))}
                         </span>
+                        {filterDay === 'all' && payment.days.length > 1 && (
+                          <span className="text-label-sm" style={{ color: 'var(--color-on-surface-variant)', marginLeft: '8px' }}>
+                            ({formatCOP(Number(payment.amount))} c/u)
+                          </span>
+                        )}
                       </div>
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'row', gap: '8px' }}>
@@ -723,29 +793,35 @@ export default function RecurringPayments() {
             />
           </div>
           
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '16px' }}>
-            <label className="text-label-md" style={{ color: 'var(--color-on-surface)' }}>
-              Categoría
-            </label>
-            <select 
-              value={editCategory} 
-              onChange={(e) => setEditCategory(e.target.value)}
-              style={{
-                width: '100%',
-                padding: '12px 16px',
-                borderRadius: '12px',
-                border: '1px solid var(--color-outline-variant)',
-                backgroundColor: 'var(--color-surface-container-lowest)',
-                color: 'var(--color-on-surface)',
-                fontFamily: 'inherit',
-                fontSize: '16px',
-                appearance: 'none',
-              }}
-            >
-              {PAYMENT_CATEGORIES.map(cat => (
-                <option key={cat} value={cat}>{cat}</option>
-              ))}
-            </select>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-end', marginBottom: '16px' }}>
+            <div style={{ flex: 1 }}>
+              <label className="text-label-md" style={{ color: 'var(--color-on-surface)' }}>
+                Categoría
+              </label>
+              <select 
+                value={editCategory} 
+                onChange={(e) => setEditCategory(e.target.value)}
+                style={{
+                  width: '100%',
+                  padding: '12px 16px',
+                  borderRadius: '12px',
+                  border: '1px solid var(--color-outline-variant)',
+                  backgroundColor: 'var(--color-surface-container-lowest)',
+                  color: 'var(--color-on-surface)',
+                  fontFamily: 'inherit',
+                  fontSize: '16px',
+                  appearance: 'none',
+                  marginTop: '4px'
+                }}
+              >
+                {combinedCategories.map(cat => (
+                  <option key={cat} value={cat}>{cat}</option>
+                ))}
+              </select>
+            </div>
+            <Button variant="secondary" className={styles.iconBtn} onClick={() => setIsCategoriesModalOpen(true)} type="button" aria-label="Gestionar categorías">
+              <Settings size={20} />
+            </Button>
           </div>
 
           <div style={{ marginBottom: '16px' }}>
@@ -812,6 +888,49 @@ export default function RecurringPayments() {
             </Button>
           </div>
         </form>
+      </Modal>
+
+      {/* Categorías Modal */}
+      <Modal isOpen={isCategoriesModalOpen} onClose={() => setIsCategoriesModalOpen(false)} title="Tus Categorías">
+        <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '16px', maxHeight: '60vh', overflowY: 'auto' }}>
+          <div>
+            <h4 className="text-label-md" style={{ color: 'var(--color-on-surface-variant)', marginBottom: '8px' }}>Categorías Personalizadas</h4>
+            {customCategories.length === 0 ? (
+              <p className="text-body-sm" style={{ color: 'var(--color-on-surface-variant)', fontStyle: 'italic' }}>
+                No has creado categorías personalizadas aún.
+              </p>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {customCategories.map(cat => (
+                  <div key={cat.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px', backgroundColor: 'var(--color-surface-container-lowest)', borderRadius: '8px', border: '1px solid var(--color-outline-variant)' }}>
+                    <span className="text-body-md">{cat.name}</span>
+                    <button 
+                      onClick={() => handleDeleteCategory(cat.id)}
+                      style={{ background: 'none', border: 'none', color: 'var(--color-error)', cursor: 'pointer', padding: '4px' }}
+                      aria-label="Eliminar categoría"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <form onSubmit={handleAddCategory} style={{ display: 'flex', gap: '8px', marginTop: '16px', paddingTop: '16px', borderTop: '1px solid var(--color-outline-variant)' }}>
+            <div style={{ flex: 1 }}>
+              <Input 
+                label="Nueva Categoría" 
+                placeholder="Ej. Gimnasio..." 
+                value={newCategoryName}
+                onChange={(e) => setNewCategoryName(e.target.value)}
+              />
+            </div>
+            <Button type="submit" variant="primary" style={{ alignSelf: 'flex-end', padding: '12px', height: '48px' }} disabled={!newCategoryName.trim()}>
+              Agregar
+            </Button>
+          </form>
+        </div>
       </Modal>
     </main>
   );
