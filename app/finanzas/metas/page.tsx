@@ -47,6 +47,11 @@ export default function MetasAhorro() {
   
   const [isDeleteSavingModalOpen, setIsDeleteSavingModalOpen] = useState(false);
   const [savingToDelete, setSavingToDelete] = useState<SavingGoal | null>(null);
+
+  const [isEditSavingModalOpen, setIsEditSavingModalOpen] = useState(false);
+  const [editSavingTitle, setEditSavingTitle] = useState('');
+  const [editSavingTarget, setEditSavingTarget] = useState('');
+  const [editCreateShareEmail, setEditCreateShareEmail] = useState('');
   
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [filterMode, setFilterMode] = useState<'all' | 'personal' | 'shared'>('all');
@@ -188,6 +193,47 @@ export default function MetasAhorro() {
     }
   };
 
+  const openEditModal = (saving: SavingGoal) => {
+    setSelectedSaving(saving);
+    setEditSavingTitle(saving.title);
+    setEditSavingTarget(saving.targetAmount.toString());
+    setEditCreateShareEmail('');
+    setIsEditSavingModalOpen(true);
+  };
+
+  const handleEditSaving = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedSaving || !editSavingTitle.trim() || !editSavingTarget || isSubmitting || !user) return;
+    setIsSubmitting(true);
+    try {
+      let currentSharedWith = selectedSaving.sharedWith || [];
+      if (editCreateShareEmail.trim()) {
+        const usersRef = collection(db, 'users');
+        const q = query(usersRef, where('email', '==', editCreateShareEmail.trim().toLowerCase()));
+        const snap = await getDocs(q);
+        if (!snap.empty) {
+          const friendUid = snap.docs[0].data().uid;
+          if (friendUid !== user.uid) {
+            currentSharedWith = [...new Set([...currentSharedWith, friendUid])];
+          }
+        }
+      }
+
+      await updateDoc(doc(db, 'savings', selectedSaving.id), {
+        title: editSavingTitle.trim(),
+        targetAmount: parseCOP(editSavingTarget),
+        sharedWith: currentSharedWith,
+      });
+
+      setIsEditSavingModalOpen(false);
+      setSelectedSaving(null);
+    } catch (error) {
+      console.error(error);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   if (loading || !user || !isReady) {
     return (
       <main className={`container ${styles.main}`}>
@@ -321,18 +367,38 @@ export default function MetasAhorro() {
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                       <Target size={20} color="var(--color-primary)" />
                       <span className="text-body-md" style={{ fontWeight: 600 }}>{s.title}</span>
+                      {s.sharedWith && s.sharedWith.length > 0 && (
+                        <div style={{ marginLeft: '4px' }}>
+                          <AvatarGroup 
+                            users={[
+                              usersMap[s.ownerId],
+                              ...s.sharedWith.map((uid: string) => usersMap[uid])
+                            ].filter(Boolean) as any} 
+                            size="sm" 
+                          />
+                        </div>
+                      )}
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                       <span className="text-label-sm" style={{ color: 'var(--color-on-surface-variant)' }}>
                         {progress.toFixed(0)}%
                       </span>
                       {s.ownerId === user?.uid && (
-                        <button 
-                          onClick={(e) => { e.stopPropagation(); setSavingToDelete(s); setIsDeleteSavingModalOpen(true); }}
-                          style={{ background: 'none', border: 'none', color: 'var(--color-on-surface-variant)', cursor: 'pointer', padding: '4px' }}
-                        >
-                          <Trash2 size={16} />
-                        </button>
+                        <div style={{ display: 'flex', gap: '4px' }}>
+                          <button 
+                            onClick={(e) => { e.stopPropagation(); openEditModal(s); }}
+                            style={{ background: 'none', border: 'none', color: 'var(--color-on-surface-variant)', cursor: 'pointer', padding: '4px' }}
+                            aria-label="Editar meta"
+                          >
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path></svg>
+                          </button>
+                          <button 
+                            onClick={(e) => { e.stopPropagation(); setSavingToDelete(s); setIsDeleteSavingModalOpen(true); }}
+                            style={{ background: 'none', border: 'none', color: 'var(--color-on-surface-variant)', cursor: 'pointer', padding: '4px' }}
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        </div>
                       )}
                     </div>
                   </div>
@@ -369,12 +435,12 @@ export default function MetasAhorro() {
             placeholder="$ 0" 
             required 
           />
-          <UserEmailAutocomplete
-            label="Compartir con (Email)"
-            value={createShareEmail}
-            onChange={setCreateShareEmail}
-            placeholder="amigo@email.com (Opcional)"
-          />
+          <div style={{ marginTop: '16px' }}>
+            <UserEmailAutocomplete value={createShareEmail} onChange={setCreateShareEmail} />
+            <p className="text-label-sm" style={{ color: 'var(--color-on-surface-variant)', marginTop: '8px' }}>
+              Opcional: Compartir con amigo.
+            </p>
+          </div>
           <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', marginTop: '8px' }}>
             <Button type="button" variant="ghost" onClick={() => setIsNewSavingModalOpen(false)}>Cancelar</Button>
             <Button type="submit" disabled={isSubmitting || !savingTitle || !savingTarget}>Crear Meta</Button>
@@ -437,6 +503,37 @@ export default function MetasAhorro() {
             </Button>
           </div>
         </div>
+      </Modal>
+
+      <Modal isOpen={isEditSavingModalOpen} onClose={() => setIsEditSavingModalOpen(false)} title="Editar Meta">
+        <form onSubmit={handleEditSaving} style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginTop: '16px' }}>
+          <Input 
+            label="¿Qué quieres lograr?" 
+            value={editSavingTitle} 
+            onChange={(e) => setEditSavingTitle(e.target.value)} 
+            placeholder="Ej: Viaje a Japón" 
+            required 
+          />
+          <Input 
+            label="¿Cuánto necesitas? ($)" 
+            type="text" 
+            inputMode="numeric"
+            value={editSavingTarget} 
+            onChange={(e) => setEditSavingTarget(formatInputCOP(e.target.value))} 
+            placeholder="$ 0" 
+            required 
+          />
+          <div style={{ marginTop: '16px' }}>
+            <UserEmailAutocomplete value={editCreateShareEmail} onChange={setEditCreateShareEmail} />
+            <p className="text-label-sm" style={{ color: 'var(--color-on-surface-variant)', marginTop: '8px' }}>
+              Opcional: Compartir con amigo.
+            </p>
+          </div>
+          <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', marginTop: '8px' }}>
+            <Button type="button" variant="ghost" onClick={() => setIsEditSavingModalOpen(false)}>Cancelar</Button>
+            <Button type="submit" disabled={isSubmitting || !editSavingTitle || !editSavingTarget}>Guardar</Button>
+          </div>
+        </form>
       </Modal>
     </main>
   );

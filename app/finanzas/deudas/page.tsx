@@ -393,6 +393,17 @@ export default function Deudas() {
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                       <Target size={20} color={isPaid ? "#10B981" : "var(--color-error)"} />
                       <span className="text-body-md" style={{ fontWeight: 600, textDecoration: isPaid ? 'line-through' : 'none' }}>{d.title}</span>
+                      {d.sharedWith && d.sharedWith.length > 0 && (
+                        <div style={{ marginLeft: '4px' }}>
+                          <AvatarGroup 
+                            users={[
+                              usersMap[d.ownerId],
+                              ...d.sharedWith.map((uid: string) => usersMap[uid])
+                            ].filter(Boolean) as any} 
+                            size="sm" 
+                          />
+                        </div>
+                      )}
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                       <span className="text-label-sm" style={{ color: 'var(--color-on-surface-variant)' }}>

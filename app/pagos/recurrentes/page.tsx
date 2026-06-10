@@ -87,6 +87,10 @@ export default function RecurringPayments() {
   const [customCategories, setCustomCategories] = useState<CustomCategory[]>([]);
   const [isCategoriesModalOpen, setIsCategoriesModalOpen] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState('');
+  
+  // Custom Category Edit State
+  const [editingCategoryId, setEditingCategoryId] = useState<string | null>(null);
+  const [editCategoryName, setEditCategoryName] = useState('');
 
   const combinedCategories = [...PAYMENT_CATEGORIES, ...customCategories.map(c => c.name), 'Otro'];
 
@@ -427,6 +431,24 @@ export default function RecurringPayments() {
     }
   };
 
+  const handleEditCategory = async (id: string) => {
+    if (!editCategoryName.trim()) return;
+    try {
+      await updateDoc(doc(db, 'financeCategories', id), {
+        name: editCategoryName.trim()
+      });
+      setEditingCategoryId(null);
+      setEditCategoryName('');
+    } catch (error) {
+      console.error(error);
+    }
+  };
+
+  const startEditingCategory = (cat: CustomCategory) => {
+    setEditingCategoryId(cat.id);
+    setEditCategoryName(cat.name);
+  };
+
   if (loading || !user) {
     return (
       <main className={`container ${styles.main}`}>
@@ -709,12 +731,12 @@ export default function RecurringPayments() {
                       </div>
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'row', gap: '8px' }}>
-                      {payment.ownerId === user?.uid && (
+                      {(payment.ownerId === user?.uid || (payment.sharedWith && payment.sharedWith.includes(user?.uid || ''))) && (
                         <>
-                          <Button variant="ghost" onClick={() => openEditModal(payment)} aria-label="Editar" style={{ padding: '8px', height: 'auto', minWidth: 'auto' }}>
+                          <Button variant="ghost" onClick={(e) => { e.stopPropagation(); openEditModal(payment); }} aria-label="Editar" style={{ padding: '8px', height: 'auto', minWidth: 'auto' }}>
                             <Pencil size={20} color="var(--color-primary)" />
                           </Button>
-                          <Button variant="ghost" onClick={() => openDeleteModal(payment)} aria-label="Eliminar" style={{ padding: '8px', height: 'auto', minWidth: 'auto' }}>
+                          <Button variant="ghost" onClick={(e) => { e.stopPropagation(); openDeleteModal(payment); }} aria-label="Eliminar" style={{ padding: '8px', height: 'auto', minWidth: 'auto' }}>
                             <Trash2 size={20} color="var(--color-error)" />
                           </Button>
                         </>
@@ -903,14 +925,39 @@ export default function RecurringPayments() {
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                 {customCategories.map(cat => (
                   <div key={cat.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px', backgroundColor: 'var(--color-surface-container-lowest)', borderRadius: '8px', border: '1px solid var(--color-outline-variant)' }}>
-                    <span className="text-body-md">{cat.name}</span>
-                    <button 
-                      onClick={() => handleDeleteCategory(cat.id)}
-                      style={{ background: 'none', border: 'none', color: 'var(--color-error)', cursor: 'pointer', padding: '4px' }}
-                      aria-label="Eliminar categoría"
-                    >
-                      <Trash2 size={16} />
-                    </button>
+                    {editingCategoryId === cat.id ? (
+                      <div style={{ display: 'flex', gap: '8px', flex: 1, alignItems: 'center' }}>
+                        <input 
+                          type="text" 
+                          value={editCategoryName} 
+                          onChange={(e) => setEditCategoryName(e.target.value)} 
+                          autoFocus
+                          style={{ flex: 1, padding: '4px 8px', borderRadius: '4px', border: '1px solid var(--color-outline-variant)', background: 'var(--color-surface)', color: 'var(--color-on-surface)' }}
+                        />
+                        <button onClick={() => handleEditCategory(cat.id)} style={{ color: 'var(--color-primary)', background: 'none', border: 'none', cursor: 'pointer', padding: '4px' }}>Guardar</button>
+                        <button onClick={() => setEditingCategoryId(null)} style={{ color: 'var(--color-on-surface-variant)', background: 'none', border: 'none', cursor: 'pointer', padding: '4px' }}>Cancelar</button>
+                      </div>
+                    ) : (
+                      <>
+                        <span className="text-body-md">{cat.name}</span>
+                        <div style={{ display: 'flex', gap: '4px' }}>
+                          <button 
+                            onClick={() => startEditingCategory(cat)}
+                            style={{ background: 'none', border: 'none', color: 'var(--color-on-surface-variant)', cursor: 'pointer', padding: '4px' }}
+                            aria-label="Editar categoría"
+                          >
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path></svg>
+                          </button>
+                          <button 
+                            onClick={() => handleDeleteCategory(cat.id)}
+                            style={{ background: 'none', border: 'none', color: 'var(--color-error)', cursor: 'pointer', padding: '4px' }}
+                            aria-label="Eliminar categoría"
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        </div>
+                      </>
+                    )}
                   </div>
                 ))}
               </div>
