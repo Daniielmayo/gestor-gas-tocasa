@@ -691,8 +691,16 @@ export default function RecurringPayments() {
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                         <h3 className="text-body-lg" style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px' }}>
                           {payment.title}
-                          {payment.ownerId !== user.uid || (payment.sharedWith && payment.sharedWith.length > 0) ? (
-                            <Users size={16} color="var(--color-primary)" />
+                          {(payment.sharedWith && payment.sharedWith.length > 0) || payment.ownerId !== user?.uid ? (
+                            <div style={{ marginLeft: '4px' }}>
+                              <AvatarGroup 
+                                users={[
+                                  usersMap[payment.ownerId],
+                                  ...(payment.sharedWith || []).map((uid: string) => usersMap[uid])
+                                ].filter(Boolean) as any} 
+                                size="sm" 
+                              />
+                            </div>
                           ) : (
                             <Lock size={16} color="var(--color-on-surface-variant)" />
                           )}
