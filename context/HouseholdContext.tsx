@@ -210,12 +210,27 @@ export function HouseholdProvider({ children }: { children: React.ReactNode }) {
   // 2. Subscribe to Payment Methods, Categories, and Tags shared in the household
   useEffect(() => {
     if (!user) return;
+    const hhId = household?.id || '';
+    const members = household?.memberIds?.length ? household.memberIds : [user.uid];
+
+    const buildHouseholdFilter = () => {
+      const clauses: any[] = [
+        where('ownerId', '==', user.uid),
+        where('sharedWith', 'array-contains', user.uid),
+      ];
+      if (hhId) {
+        clauses.push(where('householdId', '==', hhId));
+      }
+      for (const mId of members) {
+        if (mId && mId !== user.uid) {
+          clauses.push(where('ownerId', '==', mId));
+        }
+      }
+      return or(...clauses);
+    };
 
     const pmRef = collection(db, 'paymentMethods');
-    const qPm = query(
-      pmRef,
-      or(where('ownerId', '==', user.uid), where('sharedWith', 'array-contains', user.uid))
-    );
+    const qPm = query(pmRef, buildHouseholdFilter());
     const unsubPm = onSnapshot(qPm, async (snapshot) => {
       const list: PaymentMethod[] = [];
       snapshot.forEach((d) => list.push({ id: d.id, ...d.data() } as PaymentMethod));
@@ -272,10 +287,7 @@ export function HouseholdProvider({ children }: { children: React.ReactNode }) {
     });
 
     const catRef = collection(db, 'financeCategories');
-    const qCat = query(
-      catRef,
-      or(where('ownerId', '==', user.uid), where('sharedWith', 'array-contains', user.uid))
-    );
+    const qCat = query(catRef, buildHouseholdFilter());
     const unsubCat = onSnapshot(qCat, (snapshot) => {
       const list: CategoryDef[] = [];
       snapshot.forEach((d) => {
@@ -295,47 +307,15 @@ export function HouseholdProvider({ children }: { children: React.ReactNode }) {
     });
 
     const tagRef = collection(db, 'tags');
-    const qTag = query(
-      tagRef,
-      or(where('ownerId', '==', user.uid), where('sharedWith', 'array-contains', user.uid))
-    );
+    const qTag = query(tagRef, buildHouseholdFilter());
     const unsubTag = onSnapshot(qTag, (snapshot) => {
       const list: TagDef[] = [];
       snapshot.forEach((d) => list.push({ id: d.id, ...d.data() } as TagDef));
-      if (list.length === 0) {
-        setTags(
-          DEFAULT_TAGS.map((t, i) => ({
-            id: `def-tag-${i}`,
-            name: t.name,
-            color: t.color,
-            ownerId: user.uid,
-            sharedWith: [],
-          }))
-        );
-      } else {
-        // Merge default tags with custom tags avoiding duplicates
-        const names = new Set(list.map((t) => t.name.toLowerCase()));
-        const merged = [...list];
-        DEFAULT_TAGS.forEach((dt, i) => {
-          if (!names.has(dt.name.toLowerCase())) {
-            merged.push({
-              id: `def-tag-${i}`,
-              name: dt.name,
-              color: dt.color,
-              ownerId: user.uid,
-              sharedWith: [],
-            });
-          }
-        });
-        setTags(merged);
-      }
+      setTags(list);
     });
 
     const placesRef = collection(db, 'places');
-    const qPlaces = query(
-      placesRef,
-      or(where('ownerId', '==', user.uid), where('sharedWith', 'array-contains', user.uid))
-    );
+    const qPlaces = query(placesRef, buildHouseholdFilter());
     const unsubPlaces = onSnapshot(qPlaces, (snapshot) => {
       const list: KnownPlace[] = [];
       snapshot.forEach((d) => list.push({ ...(d.data() as KnownPlace), id: d.id }));
@@ -343,10 +323,7 @@ export function HouseholdProvider({ children }: { children: React.ReactNode }) {
     });
 
     const incSrcRef = collection(db, 'incomeSources');
-    const qIncSrc = query(
-      incSrcRef,
-      or(where('ownerId', '==', user.uid), where('sharedWith', 'array-contains', user.uid))
-    );
+    const qIncSrc = query(incSrcRef, buildHouseholdFilter());
     const unsubIncSrc = onSnapshot(qIncSrc, (snapshot) => {
       const list: IncomeSourceDef[] = [];
       snapshot.forEach((d) => list.push({ ...(d.data() as IncomeSourceDef), id: d.id }));
@@ -360,7 +337,7 @@ export function HouseholdProvider({ children }: { children: React.ReactNode }) {
       unsubPlaces();
       unsubIncSrc();
     };
-  }, [user, household?.id, profile?.displayName]);
+  }, [user, household?.id, household?.memberIds?.join(','), profile?.displayName]);
 
   const memberIds = household?.memberIds?.length
     ? household.memberIds
@@ -371,15 +348,116 @@ export function HouseholdProvider({ children }: { children: React.ReactNode }) {
   const partnerUid = memberIds.find((id) => id !== user?.uid) || null;
   const partner = partnerUid ? usersMap[partnerUid] || null : null;
 
-  // Combine default categories + custom categories without duplicate names
+  // 3. Automatic continuous Household Sharing Sync:
+  // Whenever a user is part of a household with a partner (e.g. Daniel + Yulitza),
+  // ensure all documents owned by this user have `sharedWith` containing all other household members
+  // and `householdId` set to `household.id`, so the partner can see everything immediately across all views.
+  useEffect(() => {
+    if (!user || !household?.id) return;
+    const otherMembers = (household.memberIds || []).filter((id) => id && id !== user.uid);
+    if (otherMembers.length === 0) return;
+
+    const syncOwnedDocs = async () => {
+      const ownerCollections = [
+        'paymentMethods',
+        'transactions',
+        'debts',
+        'recurringPayments',
+        'savings',
+        'budgets',
+        'financeCategories',
+        'tags',
+        'places',
+        'incomeSources',
+      ];
+
+      for (const colName of ownerCollections) {
+        try {
+          const qOwned = query(collection(db, colName), where('ownerId', '==', user.uid));
+          const snap = await getDocs(qOwned);
+          for (const dSnap of snap.docs) {
+            const data = dSnap.data();
+            const currentShared: string[] = Array.isArray(data.sharedWith) ? data.sharedWith : [];
+            const missing = otherMembers.filter((m) => !currentShared.includes(m));
+            if (missing.length > 0 || data.householdId !== household.id) {
+              await updateDoc(doc(db, colName, dSnap.id), {
+                sharedWith: arrayUnion(...otherMembers),
+                householdId: household.id,
+              });
+            }
+          }
+        } catch (e) {
+          // ignore individual collection sync warning
+        }
+      }
+
+      try {
+        const qWs = query(collection(db, 'periodWorksheets'), where('userId', '==', user.uid));
+        const wsSnap = await getDocs(qWs);
+        for (const dSnap of wsSnap.docs) {
+          const data = dSnap.data();
+          const currentShared: string[] = Array.isArray(data.sharedWith) ? data.sharedWith : [];
+          const missing = otherMembers.filter((m) => !currentShared.includes(m));
+          if (missing.length > 0 || data.householdId !== household.id) {
+            await updateDoc(doc(db, 'periodWorksheets', dSnap.id), {
+              sharedWith: arrayUnion(...otherMembers),
+              householdId: household.id,
+            });
+          }
+        }
+      } catch (e) {
+        // ignore worksheet sync warning
+      }
+    };
+
+    syncOwnedDocs();
+  }, [user?.uid, household?.id, household?.memberIds?.join(',')]);
+
+  // Combine default categories + custom categories, allowing custom edits or deletions of defaults
   const categories = React.useMemo(() => {
-    const base = [...DEFAULT_EXPENSE_CATEGORIES, ...DEFAULT_INCOME_CATEGORIES];
+    const disabledIds = new Set(household?.disabledDefaultCategoryIds || []);
+    const customById = new Map(customCategories.map((c) => [c.id, c]));
+    const base = [...DEFAULT_EXPENSE_CATEGORIES, ...DEFAULT_INCOME_CATEGORIES]
+      .filter((c) => !disabledIds.has(c.id))
+      .map((c) => customById.get(c.id) || c);
+
+    const existingIds = new Set(base.map((c) => c.id));
     const existingKeys = new Set(base.map((c) => `${c.type}:${c.name.toLowerCase()}`));
     const extras = customCategories.filter(
-      (c) => !existingKeys.has(`${c.type}:${c.name.toLowerCase()}`)
+      (c) =>
+        !disabledIds.has(c.id) &&
+        !existingIds.has(c.id) &&
+        !existingKeys.has(`${c.type}:${c.name.toLowerCase()}`)
     );
     return [...base, ...extras];
-  }, [customCategories]);
+  }, [customCategories, household?.disabledDefaultCategoryIds]);
+
+  // Combine default tags + custom tags, allowing custom edits or deletions of defaults
+  const mergedTags = React.useMemo(() => {
+    const disabledIds = new Set(household?.disabledDefaultTagIds || []);
+    const customById = new Map(tags.map((t) => [t.id, t]));
+    const defaultsWithIds: TagDef[] = DEFAULT_TAGS.map((dt, i) => ({
+      id: `def-tag-${i}`,
+      name: dt.name,
+      color: dt.color,
+      ownerId: user?.uid || '',
+      sharedWith: [],
+    }));
+
+    const base = defaultsWithIds
+      .filter((dt) => !disabledIds.has(dt.id))
+      .map((dt) => customById.get(dt.id) || dt);
+
+    const existingIds = new Set(base.map((t) => t.id));
+    const existingNames = new Set(base.map((t) => t.name.toLowerCase()));
+    const extras = tags.filter(
+      (t) =>
+        !disabledIds.has(t.id) &&
+        !existingIds.has(t.id) &&
+        !existingNames.has(t.name.toLowerCase())
+    );
+    return [...base, ...extras];
+  }, [tags, household?.disabledDefaultTagIds, user?.uid]);
 
   const linkPartnerByEmailOrCode = async (
     emailOrCode: string
@@ -454,13 +532,50 @@ export function HouseholdProvider({ children }: { children: React.ReactNode }) {
         { merge: true }
       );
 
-      // Backfill existing user payment methods so partner can see & use them (RF-02)
-      for (const pm of paymentMethods) {
-        if (pm.ownerId === user.uid && !(pm.sharedWith || []).includes(friendUid)) {
-          await updateDoc(doc(db, 'paymentMethods', pm.id), {
-            sharedWith: arrayUnion(friendUid),
-          });
+      // Backfill existing user financial documents so partner can see them across all tabs (Mío / Pareja / Conjunto / Todo)
+      const collectionsToShare = [
+        'paymentMethods',
+        'transactions',
+        'debts',
+        'recurringPayments',
+        'savings',
+        'budgets',
+        'financeCategories',
+        'tags',
+        'places',
+        'incomeSources',
+      ];
+
+      for (const colName of collectionsToShare) {
+        try {
+          const qOwned = query(collection(db, colName), where('ownerId', '==', user.uid));
+          const ownedSnap = await getDocs(qOwned);
+          for (const dSnap of ownedSnap.docs) {
+            const sw: string[] = dSnap.data().sharedWith || [];
+            if (!sw.includes(friendUid)) {
+              await updateDoc(doc(db, colName, dSnap.id), {
+                sharedWith: arrayUnion(friendUid),
+              });
+            }
+          }
+        } catch (e) {
+          console.warn(`Could not backfill ${colName} for partner:`, e);
         }
+      }
+
+      try {
+        const qWs = query(collection(db, 'periodWorksheets'), where('userId', '==', user.uid));
+        const wsSnap = await getDocs(qWs);
+        for (const dSnap of wsSnap.docs) {
+          const sw: string[] = dSnap.data().sharedWith || [];
+          if (!sw.includes(friendUid)) {
+            await updateDoc(doc(db, 'periodWorksheets', dSnap.id), {
+              sharedWith: arrayUnion(friendUid),
+            });
+          }
+        }
+      } catch (e) {
+        console.warn('Could not backfill periodWorksheets for partner:', e);
       }
 
       return {
@@ -492,7 +607,7 @@ export function HouseholdProvider({ children }: { children: React.ReactNode }) {
         setGlobalScope,
         paymentMethods,
         categories,
-        tags,
+        tags: mergedTags,
         knownPlaces,
         incomeSources,
         lastUsedPaymentMethodId,

@@ -14,6 +14,8 @@ export interface Household {
   memberIds: string[];
   inviteCode: string;
   personalVisibility: 'totals_only' | 'full_detail';
+  disabledDefaultCategoryIds?: string[];
+  disabledDefaultTagIds?: string[];
   createdAt?: any;
   updatedAt?: any;
 }

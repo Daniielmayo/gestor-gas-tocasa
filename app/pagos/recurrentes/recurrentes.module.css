@@ -1,23 +1,23 @@
 .main {
-  padding-top: var(--spacing-md);
+  padding-top: var(--spacing-sm);
   padding-bottom: 88px;
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-lg);
+  gap: 8px;
 }
 
 .appBar {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 24px;
+  margin-bottom: 2px;
   position: sticky;
   top: 0;
   z-index: 50;
   background-color: var(--color-surface);
-  margin-top: -16px;
-  padding-top: 16px;
-  padding-bottom: 16px;
+  margin-top: -12px;
+  padding-top: 10px;
+  padding-bottom: 6px;
 }
 
 .iconBtn {

@@ -1,9 +1,9 @@
 .main {
-  padding-top: var(--spacing-lg);
+  padding-top: var(--spacing-sm);
   padding-bottom: 88px;
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-lg);
+  gap: 8px;
 }
 
 .header {
@@ -14,22 +14,22 @@
   top: 0;
   z-index: 50;
   background-color: var(--color-surface);
-  margin-top: calc(-1 * var(--spacing-lg));
-  padding-top: var(--spacing-lg);
-  padding-bottom: var(--spacing-sm);
+  margin-top: -12px;
+  padding-top: 10px;
+  padding-bottom: 6px;
 }
 
 .monthSelector {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: var(--spacing-sm) 0;
-  margin-bottom: var(--spacing-sm);
+  padding: 2px 0;
+  margin-bottom: 0;
 }
 
 .monthText {
   text-transform: capitalize;
-  font-size: 18px;
+  font-size: 14px;
   font-weight: 600;
   color: var(--color-on-surface);
 }
@@ -41,26 +41,26 @@
 
 .balanceCard {
   background: var(--color-surface-container-low);
-  padding: var(--spacing-lg);
+  padding: 14px 16px;
   border-radius: var(--radius-lg);
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: var(--spacing-md);
+  gap: 6px;
   box-shadow: var(--shadow-level-1);
 }
 
 .balanceTitle {
   color: var(--color-on-surface-variant);
   text-transform: uppercase;
-  letter-spacing: 1px;
-  font-size: 12px;
+  letter-spacing: 0.8px;
+  font-size: 11px;
   font-weight: 600;
 }
 
 .balanceAmount {
-  font-size: 36px;
-  font-weight: 600;
+  font-size: 28px;
+  font-weight: 700;
   letter-spacing: -0.5px;
   color: var(--color-on-surface);
   transition: color 0.3s ease;

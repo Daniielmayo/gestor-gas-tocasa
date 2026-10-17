@@ -32,6 +32,10 @@ import {
   AlertTriangle,
   Settings,
   CreditCard,
+  PieChart,
+  Tag,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import styles from './dashboard.module.css';
 import { useAuth } from '@/context/AuthContext';
@@ -66,7 +70,7 @@ function getDaysUntil(targetDay: number): number {
 
 export default function Dashboard() {
   const { user, profile, loading, logout } = useAuth();
-  const { household, partner, partnerUid, globalScope } = useHousehold();
+  const { household, partner, partnerUid, globalScope, categories } = useHousehold();
   const router = useRouter();
 
   const [lists, setLists] = useState<any[]>([]);
@@ -98,6 +102,22 @@ export default function Dashboard() {
   const [isHouseholdConfigOpen, setIsHouseholdConfigOpen] = useState(false);
   const [recentAlerts, setRecentAlerts] = useState<TriggeredBudgetAlert[]>([]);
 
+  // Monthly Category / Tag Chart states
+  const [chartMonthDate, setChartMonthDate] = useState<Date>(() => new Date());
+  const [chartViewMode, setChartViewMode] = useState<'category' | 'tag'>('category');
+
+  const prevChartMonth = () => {
+    setChartMonthDate((prev) => new Date(prev.getFullYear(), prev.getMonth() - 1, 1));
+  };
+
+  const nextChartMonth = () => {
+    setChartMonthDate((prev) => new Date(prev.getFullYear(), prev.getMonth() + 1, 1));
+  };
+
+  const chartMonthLabel = useMemo(() => {
+    return chartMonthDate.toLocaleDateString('es-CO', { month: 'long', year: 'numeric' });
+  }, [chartMonthDate]);
+
   useEffect(() => {
     if (!loading && !user) {
       router.push('/login');
@@ -112,13 +132,25 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (!user) return;
+    const hhId = household?.id || '';
+
+    const buildOwnerFilter = () => {
+      const clauses: any[] = [
+        where('ownerId', '==', user.uid),
+        where('sharedWith', 'array-contains', user.uid),
+      ];
+      if (partnerUid) {
+        clauses.push(where('ownerId', '==', partnerUid));
+      }
+      if (hhId) {
+        clauses.push(where('householdId', '==', hhId));
+      }
+      return or(...clauses);
+    };
 
     // 1. Subscribe to lists
     const listsRef = collection(db, 'lists');
-    const qLists = query(
-      listsRef,
-      or(where('ownerId', '==', user.uid), where('sharedWith', 'array-contains', user.uid))
-    );
+    const qLists = query(listsRef, buildOwnerFilter());
 
     const unsubLists = onSnapshot(qLists, (snapshot) => {
       const data: any[] = [];
@@ -142,10 +174,7 @@ export default function Dashboard() {
 
     // 2. Subscribe to recurring payments
     const paymentsRef = collection(db, 'recurringPayments');
-    const qPayments = query(
-      paymentsRef,
-      or(where('ownerId', '==', user.uid), where('sharedWith', 'array-contains', user.uid))
-    );
+    const qPayments = query(paymentsRef, buildOwnerFilter());
 
     const unsubPayments = onSnapshot(qPayments, (snapshot) => {
       const allUpcoming: any[] = [];
@@ -166,10 +195,7 @@ export default function Dashboard() {
 
     // 3. Subscribe to transactions
     const txRef = collection(db, 'transactions');
-    const qTx = query(
-      txRef,
-      or(where('ownerId', '==', user.uid), where('sharedWith', 'array-contains', user.uid))
-    );
+    const qTx = query(txRef, buildOwnerFilter());
     const unsubTx = onSnapshot(qTx, (snapshot) => {
       const list: EnhancedTransaction[] = [];
       const paidIds = new Set<string>();
@@ -196,10 +222,7 @@ export default function Dashboard() {
 
     // 4. Subscribe to budgets
     const budgetRef = collection(db, 'budgets');
-    const qBudget = query(
-      budgetRef,
-      or(where('ownerId', '==', user.uid), where('sharedWith', 'array-contains', user.uid))
-    );
+    const qBudget = query(budgetRef, buildOwnerFilter());
     const unsubBudgets = onSnapshot(qBudget, (snapshot) => {
       const bList: BudgetDoc[] = [];
       snapshot.forEach((d) => bList.push({ id: d.id, ...d.data() } as BudgetDoc));
@@ -208,10 +231,7 @@ export default function Dashboard() {
 
     // 5. Subscribe to settlements
     const settleRef = collection(db, 'settlements');
-    const qSettle = query(
-      settleRef,
-      or(where('ownerId', '==', user.uid), where('sharedWith', 'array-contains', user.uid))
-    );
+    const qSettle = query(settleRef, buildOwnerFilter());
     const unsubSettle = onSnapshot(qSettle, (snapshot) => {
       const sList: SettlementDoc[] = [];
       snapshot.forEach((d) => sList.push({ id: d.id, ...d.data() } as SettlementDoc));
@@ -220,10 +240,7 @@ export default function Dashboard() {
 
     // 6. Subscribe to savings goals
     const savRef = collection(db, 'savings');
-    const qSav = query(
-      savRef,
-      or(where('ownerId', '==', user.uid), where('sharedWith', 'array-contains', user.uid))
-    );
+    const qSav = query(savRef, buildOwnerFilter());
     const unsubSav = onSnapshot(qSav, (snapshot) => {
       const svList: any[] = [];
       snapshot.forEach((d) => svList.push({ id: d.id, ...d.data() }));
@@ -232,10 +249,7 @@ export default function Dashboard() {
 
     // 7. Subscribe to credit card debts
     const debtsRef = collection(db, 'debts');
-    const qDebts = query(
-      debtsRef,
-      or(where('ownerId', '==', user.uid), where('sharedWith', 'array-contains', user.uid))
-    );
+    const qDebts = query(debtsRef, buildOwnerFilter());
     const unsubDebts = onSnapshot(qDebts, (snapshot) => {
       const dList: DebtDoc[] = [];
       snapshot.forEach((d) => dList.push({ ...(d.data() as DebtDoc), id: d.id }));
@@ -251,7 +265,7 @@ export default function Dashboard() {
       unsubSav();
       unsubDebts();
     };
-  }, [user]);
+  }, [user, partnerUid, household?.id]);
 
   const resolveTxScope = (t: EnhancedTransaction): Scope => {
     if (t.scope === 'personal' || t.scope === 'conjunto') return t.scope;
@@ -431,6 +445,103 @@ export default function Dashboard() {
     }
   };
 
+  const chartData = useMemo(() => {
+    if (!user) return { totalExpenses: 0, items: [] as Array<{ label: string; amount: number; pct: number; color: string; count: number }>, conicGradient: '' };
+    const targetMonth = chartMonthDate.getMonth();
+    const targetYear = chartMonthDate.getFullYear();
+
+    const palette = [
+      '#3B82F6',
+      '#10B981',
+      '#F59E0B',
+      '#EF4444',
+      '#8B5CF6',
+      '#EC4899',
+      '#06B6D4',
+      '#D97706',
+      '#6366F1',
+      '#14B8A6',
+    ];
+
+    const grouped = new Map<string, { amount: number; count: number; color?: string }>();
+    let totalExpenses = 0;
+
+    for (const t of transactions) {
+      if (t.deletedAt || t.type !== 'expense') continue;
+      const scope = resolveTxScope(t);
+      const payer = t.paidByUserId || t.ownerId;
+
+      if (globalScope === 'mio') {
+        if (!(scope === 'personal' && t.ownerId === user.uid) && payer !== user.uid) continue;
+      } else if (globalScope === 'conjunto') {
+        if (scope !== 'conjunto') continue;
+      } else if (globalScope === 'pareja' && partnerUid) {
+        if (payer !== partnerUid && t.ownerId !== partnerUid) continue;
+      }
+
+      const txDate = t.createdAt?.toDate ? t.createdAt.toDate() : new Date();
+      if (txDate.getMonth() !== targetMonth || txDate.getFullYear() !== targetYear) continue;
+
+      const amt = Number(t.amount || 0);
+      if (amt <= 0) continue;
+
+      if (chartViewMode === 'category') {
+        const catName = (t.category || 'Otros Gastos').trim();
+        const catDef = categories.find(
+          (c) => c.name.toLowerCase() === catName.toLowerCase()
+        );
+        const prev = grouped.get(catName) || { amount: 0, count: 0, color: catDef?.color };
+        grouped.set(catName, {
+          amount: prev.amount + amt,
+          count: prev.count + 1,
+          color: prev.color || catDef?.color,
+        });
+        totalExpenses += amt;
+      } else {
+        const txTags = t.tags && t.tags.length > 0 ? t.tags : ['sin-tag'];
+        for (const rawTag of txTags) {
+          const cleanTag = `#${rawTag.replace(/^#/, '').toLowerCase()}`;
+          const prev = grouped.get(cleanTag) || { amount: 0, count: 0 };
+          grouped.set(cleanTag, {
+            amount: prev.amount + amt,
+            count: prev.count + 1,
+          });
+        }
+        totalExpenses += amt;
+      }
+    }
+
+    const sorted = Array.from(grouped.entries())
+      .map(([label, info], idx) => ({
+        label,
+        amount: info.amount,
+        count: info.count,
+        pct: totalExpenses > 0 ? Math.min(100, Math.round((info.amount / totalExpenses) * 100)) : 0,
+        color: info.color || palette[idx % palette.length],
+      }))
+      .sort((a, b) => b.amount - a.amount);
+
+    // Build CSS conic-gradient for the donut chart
+    let currentDeg = 0;
+    const stops: string[] = [];
+    const totalSliceSum = sorted.reduce((acc, item) => acc + item.amount, 0);
+    for (const item of sorted) {
+      const deg = totalSliceSum > 0 ? (item.amount / totalSliceSum) * 360 : 0;
+      const nextDeg = currentDeg + deg;
+      stops.push(`${item.color} ${currentDeg.toFixed(1)}deg ${nextDeg.toFixed(1)}deg`);
+      currentDeg = nextDeg;
+    }
+
+    return {
+      totalExpenses,
+      items: sorted,
+      conicGradient:
+        stops.length > 0
+          ? `conic-gradient(${stops.join(', ')})`
+          : 'conic-gradient(var(--color-surface-container) 0deg 360deg)',
+    };
+  }, [transactions, chartMonthDate, chartViewMode, globalScope, user, partnerUid, categories]);
+
   if (loading || !user) {
     return (
       <main className={`container ${styles.main}`}>
@@ -439,10 +550,24 @@ export default function Dashboard() {
     );
   }
 
-  const topLists = lists.slice(0, 3);
-  const topPayments = upcomingPayments.slice(0, 3);
-  const totalSavingsTarget = savings.reduce((s, g) => s + Number(g.targetAmount || 0), 0);
-  const totalSavingsCurrent = savings.reduce((s, g) => s + Number(g.currentAmount || 0), 0);
+  const scopedUpcomingPayments = upcomingPayments.filter((p) => {
+    const pScope = p.scope || (p.sharedWith && p.sharedWith.length > 0 ? 'conjunto' : 'personal');
+    if (globalScope === 'mio') return p.ownerId === user.uid;
+    if (globalScope === 'pareja' && partnerUid) return p.ownerId === partnerUid;
+    if (globalScope === 'conjunto') return pScope === 'conjunto';
+    return true;
+  });
+  const topPayments = scopedUpcomingPayments.slice(0, 3);
+
+  const scopedSavings = savings.filter((s) => {
+    const sScope = s.scope || (s.sharedWith && s.sharedWith.length > 0 ? 'conjunto' : 'personal');
+    if (globalScope === 'mio') return s.ownerId === user.uid;
+    if (globalScope === 'pareja' && partnerUid) return s.ownerId === partnerUid;
+    if (globalScope === 'conjunto') return sScope === 'conjunto';
+    return true;
+  });
+  const totalSavingsTarget = scopedSavings.reduce((s, g) => s + Number(g.targetAmount || 0), 0);
+  const totalSavingsCurrent = scopedSavings.reduce((s, g) => s + Number(g.currentAmount || 0), 0);
   const savingsPct =
     totalSavingsTarget > 0 ? Math.min(100, Math.round((totalSavingsCurrent / totalSavingsTarget) * 100)) : 0;
 
@@ -565,7 +690,7 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Main Balance Card + One-Tap Quick Expense CTA */}
+      {/* Main Balance Card + Credit Card Debt Highlight */}
       <Card className={styles.balanceCard}>
         {isLoadingFinances ? (
           <div style={{ padding: '20px 0', textAlign: 'center' }}>
@@ -577,8 +702,8 @@ export default function Dashboard() {
               display: 'flex',
               flexDirection: 'column',
               alignItems: 'center',
-              gap: '8px',
-              padding: '12px 0',
+              gap: '10px',
+              padding: '8px 0 4px',
             }}
           >
             <span
@@ -587,95 +712,437 @@ export default function Dashboard() {
             >
               Balance General del Mes ({globalScope.toUpperCase()})
             </span>
-            <h2 className="text-display-lg" style={{ color: '#FFF' }}>
+            <h2
+              className="text-display-lg"
+              style={{ color: '#FFF', margin: 0, fontVariantNumeric: 'tabular-nums' }}
+            >
               {formatCOP(currentMonthBalance)}
             </h2>
+
             <div
               style={{
+                background: 'rgba(255,255,255,0.12)',
+                padding: '4px 12px',
+                borderRadius: '16px',
+              }}
+            >
+              <span
+                className="text-label-sm"
+                style={{ color: 'rgba(255,255,255,0.85)', fontVariantNumeric: 'tabular-nums' }}
+              >
+                Mes anterior: {formatCOP(prevMonthBalance)}
+              </span>
+            </div>
+
+            {/* Bloque Destacado Rojo de Deudas de Tarjetas de Crédito dentro de la Card Principal */}
+            <Link
+              href="/finanzas/deudas"
+              style={{
+                width: '100%',
+                marginTop: '8px',
+                padding: '14px 16px',
+                borderRadius: '14px',
+                background: 'linear-gradient(135deg, #DC2626 0%, #991B1B 100%)',
+                border: '1px solid rgba(254, 202, 202, 0.45)',
+                boxShadow: '0 8px 20px rgba(153, 27, 27, 0.35)',
+                textDecoration: 'none',
+                color: '#FFFFFF',
                 display: 'flex',
-                gap: '8px',
-                flexWrap: 'wrap',
-                justifyContent: 'center',
+                flexDirection: 'column',
+                gap: '10px',
               }}
             >
               <div
                 style={{
-                  background: 'rgba(255,255,255,0.12)',
-                  padding: '4px 12px',
-                  borderRadius: '16px',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
                 }}
               >
-                <span className="text-label-sm" style={{ color: 'rgba(255,255,255,0.85)' }}>
-                  Mes anterior: {formatCOP(prevMonthBalance)}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <div
+                    style={{
+                      width: '28px',
+                      height: '28px',
+                      borderRadius: '8px',
+                      backgroundColor: 'rgba(255, 255, 255, 0.22)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                  >
+                    <CreditCard size={16} color="#FFFFFF" />
+                  </div>
+                  <span style={{ fontSize: '13px', fontWeight: 800, letterSpacing: '0.3px' }}>
+                    DEUDA EN TARJETAS DE CRÉDITO
+                  </span>
+                </div>
+                <span
+                  style={{
+                    fontSize: '11px',
+                    fontWeight: 700,
+                    padding: '3px 9px',
+                    borderRadius: '999px',
+                    backgroundColor: 'rgba(255, 255, 255, 0.22)',
+                  }}
+                >
+                  {debtPaidPct}% abonado →
                 </span>
               </div>
-              <Link
-                href="/finanzas/deudas"
+
+              <div
                 style={{
-                  background: 'rgba(255,255,255,0.18)',
-                  padding: '4px 12px',
-                  borderRadius: '16px',
-                  textDecoration: 'none',
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(3, 1fr)',
+                  gap: '8px',
+                  textAlign: 'left',
+                  paddingTop: '4px',
                 }}
               >
-                <span className="text-label-sm" style={{ color: '#FFFFFF', fontWeight: 600 }}>
-                  Deuda Tarjetas: {formatCOP(totalDebtRemaining)} ({debtPaidPct}% abonado)
+                <div>
+                  <div style={{ fontSize: '10px', color: 'rgba(255, 255, 255, 0.85)' }}>
+                    Por Pagar
+                  </div>
+                  <div
+                    style={{
+                      fontSize: '15px',
+                      fontWeight: 800,
+                      color: '#FFFFFF',
+                      marginTop: '2px',
+                      fontVariantNumeric: 'tabular-nums',
+                    }}
+                  >
+                    {formatCOP(totalDebtRemaining)}
+                  </div>
+                </div>
+
+                <div
+                  style={{
+                    borderLeft: '1px solid rgba(255, 255, 255, 0.24)',
+                    paddingLeft: '10px',
+                  }}
+                >
+                  <div style={{ fontSize: '10px', color: 'rgba(255, 255, 255, 0.85)' }}>
+                    Total Abonado
+                  </div>
+                  <div
+                    style={{
+                      fontSize: '15px',
+                      fontWeight: 800,
+                      color: '#A7F3D0',
+                      marginTop: '2px',
+                      fontVariantNumeric: 'tabular-nums',
+                    }}
+                  >
+                    {formatCOP(totalDebtPaid)}
+                  </div>
+                </div>
+
+                <div
+                  style={{
+                    borderLeft: '1px solid rgba(255, 255, 255, 0.24)',
+                    paddingLeft: '10px',
+                  }}
+                >
+                  <div style={{ fontSize: '10px', color: 'rgba(255, 255, 255, 0.85)' }}>
+                    Total Gastado
+                  </div>
+                  <div
+                    style={{
+                      fontSize: '15px',
+                      fontWeight: 700,
+                      color: '#FEE2E2',
+                      marginTop: '2px',
+                      fontVariantNumeric: 'tabular-nums',
+                    }}
+                  >
+                    {formatCOP(totalDebtTarget)}
+                  </div>
+                </div>
+              </div>
+
+              <div
+                style={{
+                  width: '100%',
+                  height: '6px',
+                  borderRadius: '999px',
+                  backgroundColor: 'rgba(0, 0, 0, 0.25)',
+                  overflow: 'hidden',
+                }}
+              >
+                <div
+                  style={{
+                    width: `${debtPaidPct}%`,
+                    height: '100%',
+                    backgroundColor: '#34D399',
+                    transition: 'width 0.3s ease',
+                  }}
+                />
+              </div>
+            </Link>
+          </div>
+        )}
+      </Card>
+
+      {/* Gráfico Mensual de Categorías y Tags en el Home */}
+      <Card style={{ padding: '14px', marginTop: '14px' }}>
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            gap: '8px',
+            flexWrap: 'wrap',
+          }}
+        >
+          {/* Selector de Mes */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+            <button
+              type="button"
+              onClick={prevChartMonth}
+              style={{
+                width: '28px',
+                height: '28px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                backgroundColor: 'var(--color-surface-container-low)',
+                color: 'var(--color-on-surface)',
+              }}
+              title="Mes anterior"
+            >
+              <ChevronLeft size={15} />
+            </button>
+            <span
+              style={{
+                fontWeight: 700,
+                fontSize: '13px',
+                textTransform: 'capitalize',
+                minWidth: '108px',
+                textAlign: 'center',
+              }}
+            >
+              {chartMonthLabel}
+            </span>
+            <button
+              type="button"
+              onClick={nextChartMonth}
+              style={{
+                width: '28px',
+                height: '28px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                backgroundColor: 'var(--color-surface-container-low)',
+                color: 'var(--color-on-surface)',
+              }}
+              title="Mes siguiente"
+            >
+              <ChevronRight size={15} />
+            </button>
+          </div>
+
+          {/* Toggle Categorías vs Tags */}
+          <div
+            style={{
+              display: 'inline-flex',
+              backgroundColor: 'var(--color-surface-container)',
+              padding: '3px',
+              borderRadius: '9999px',
+              gap: '2px',
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => setChartViewMode('category')}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '4px',
+                padding: '5px 10px',
+                fontSize: '11px',
+                fontWeight: chartViewMode === 'category' ? 700 : 500,
+                backgroundColor:
+                  chartViewMode === 'category'
+                    ? 'var(--color-surface-container-lowest)'
+                    : 'transparent',
+                color:
+                  chartViewMode === 'category'
+                    ? 'var(--color-primary)'
+                    : 'var(--color-on-surface-variant)',
+                boxShadow: chartViewMode === 'category' ? 'var(--shadow-level-1)' : 'none',
+              }}
+            >
+              <PieChart size={12} />
+              Categorías
+            </button>
+            <button
+              type="button"
+              onClick={() => setChartViewMode('tag')}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '4px',
+                padding: '5px 10px',
+                fontSize: '11px',
+                fontWeight: chartViewMode === 'tag' ? 700 : 500,
+                backgroundColor:
+                  chartViewMode === 'tag'
+                    ? 'var(--color-surface-container-lowest)'
+                    : 'transparent',
+                color:
+                  chartViewMode === 'tag'
+                    ? 'var(--color-primary)'
+                    : 'var(--color-on-surface-variant)',
+                boxShadow: chartViewMode === 'tag' ? 'var(--shadow-level-1)' : 'none',
+              }}
+            >
+              <Tag size={12} />
+              Tags
+            </button>
+          </div>
+        </div>
+
+        {chartData.items.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '18px 8px' }}>
+            <p className="text-body-sm" style={{ color: 'var(--color-on-surface-variant)' }}>
+              No hay gastos registrados en {chartMonthLabel} para esta vista.
+            </p>
+          </div>
+        ) : (
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: '112px 1fr',
+              gap: '14px',
+              alignItems: 'center',
+              marginTop: '14px',
+            }}
+          >
+            {/* Donut visual */}
+            <div
+              style={{
+                width: '112px',
+                height: '112px',
+                borderRadius: '50%',
+                background: chartData.conicGradient,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                margin: '0 auto',
+                boxShadow: 'inset 0 0 0 1px rgba(0,0,0,0.04)',
+              }}
+            >
+              <div
+                style={{
+                  width: '74px',
+                  height: '74px',
+                  borderRadius: '50%',
+                  backgroundColor: 'var(--color-surface-container-lowest)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  padding: '4px',
+                  textAlign: 'center',
+                }}
+              >
+                <span style={{ fontSize: '9px', color: 'var(--color-on-surface-variant)' }}>
+                  Total Mes
                 </span>
-              </Link>
+                <span
+                  style={{
+                    fontSize: '11px',
+                    fontWeight: 800,
+                    color: 'var(--color-on-surface)',
+                    fontVariantNumeric: 'tabular-nums',
+                    lineHeight: 1.15,
+                  }}
+                >
+                  {formatCOP(chartData.totalExpenses)}
+                </span>
+              </div>
             </div>
 
-            <div style={{ display: 'flex', gap: '10px', marginTop: '10px', width: '100%' }}>
-              <button
-                type="button"
-                onClick={() => {
-                  setQuickModalType('expense');
-                  setIsQuickModalOpen(true);
-                }}
-                style={{
-                  flex: 1,
-                  padding: '10px 12px',
-                  borderRadius: '12px',
-                  backgroundColor: '#FFFFFF',
-                  color: 'var(--color-primary-dark)',
-                  fontWeight: 700,
-                  fontSize: '13px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '6px',
-                }}
-              >
-                <Plus size={16} /> Registrar Gasto
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setQuickModalType('income');
-                  setIsQuickModalOpen(true);
-                }}
-                style={{
-                  flex: 1,
-                  padding: '10px 12px',
-                  borderRadius: '12px',
-                  backgroundColor: 'rgba(255,255,255,0.18)',
-                  color: '#FFFFFF',
-                  fontWeight: 600,
-                  fontSize: '13px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '6px',
-                }}
-              >
-                <TrendingUp size={16} /> + Ingreso
-              </button>
+            {/* Barras y ranking de Categorías / Tags */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', minWidth: 0 }}>
+              {chartData.items.slice(0, 6).map((item) => (
+                <div key={item.label} style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      fontSize: '12px',
+                      gap: '6px',
+                    }}
+                  >
+                    <span
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        fontWeight: 600,
+                        minWidth: 0,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      <span
+                        style={{
+                          width: '8px',
+                          height: '8px',
+                          borderRadius: '50%',
+                          backgroundColor: item.color,
+                          flexShrink: 0,
+                        }}
+                      />
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {item.label}
+                      </span>
+                    </span>
+                    <span
+                      style={{
+                        fontSize: '11px',
+                        fontWeight: 700,
+                        fontVariantNumeric: 'tabular-nums',
+                        flexShrink: 0,
+                      }}
+                    >
+                      {formatCOP(item.amount)}{' '}
+                      <span style={{ color: 'var(--color-on-surface-variant)', fontWeight: 500 }}>
+                        ({item.pct}%)
+                      </span>
+                    </span>
+                  </div>
+                  <div
+                    style={{
+                      width: '100%',
+                      height: '5px',
+                      borderRadius: '999px',
+                      backgroundColor: 'var(--color-surface-container)',
+                      overflow: 'hidden',
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: `${Math.max(4, item.pct)}%`,
+                        height: '100%',
+                        borderRadius: '999px',
+                        backgroundColor: item.color,
+                      }}
+                    />
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
         )}
       </Card>
 
-      {/* Dashboard Widgets: Credit Card Debts & Abonos + Partner Balance + Savings */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '16px' }}>
+      {/* Dashboard Widgets: Detalle de Tarjetas de Crédito y Metas de Ahorro */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '14px' }}>
         {/* Credit Card Debts & Abonos Widget */}
         <Link href="/finanzas/deudas" style={{ textDecoration: 'none' }}>
           <Card style={{ padding: '14px' }}>
@@ -683,56 +1150,48 @@ export default function Dashboard() {
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <CreditCard size={18} color="var(--color-primary)" />
                 <span style={{ fontWeight: 600, fontSize: '14px' }}>
-                  Mis Deudas de Tarjetas de Crédito y Abonos
+                  Mis Tarjetas de Crédito y Abonos ({scopedDebts.length})
                 </span>
               </div>
               <ArrowRight size={16} color="var(--color-on-surface-variant)" />
             </div>
 
             {scopedDebts.length > 0 ? (
-              <div style={{ marginTop: '10px' }}>
-                <div
-                  style={{
-                    width: '100%',
-                    height: '8px',
-                    borderRadius: '999px',
-                    backgroundColor: 'var(--color-surface-container)',
-                    overflow: 'hidden',
-                  }}
-                >
-                  <div
-                    style={{
-                      width: `${debtPaidPct}%`,
-                      height: '100%',
-                      backgroundColor:
-                        debtPaidPct >= 100 ? 'var(--color-success)' : 'var(--color-primary)',
-                    }}
-                  />
-                </div>
-                <div
-                  style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    fontSize: '12px',
-                    marginTop: '6px',
-                    color: 'var(--color-on-surface-variant)',
-                    fontVariantNumeric: 'tabular-nums',
-                  }}
-                >
-                  <span>
-                    Por pagar:{' '}
-                    <strong style={{ color: 'var(--color-error)' }}>
-                      {formatCOP(totalDebtRemaining)}
-                    </strong>
-                  </span>
-                  <span>
-                    Abonado:{' '}
-                    <strong style={{ color: 'var(--color-success)' }}>
-                      {formatCOP(totalDebtPaid)}
-                    </strong>{' '}
-                    ({debtPaidPct}%)
-                  </span>
-                </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '10px' }}>
+                {scopedDebts.slice(0, 3).map((d) => {
+                  const rem = Math.max(0, Number(d.targetAmount || 0) - Number(d.currentAmount || 0));
+                  return (
+                    <div
+                      key={d.id}
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        padding: '8px 10px',
+                        borderRadius: '10px',
+                        backgroundColor: 'var(--color-surface-container-low)',
+                        fontSize: '12px',
+                      }}
+                    >
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontWeight: 600 }}>{d.title}</div>
+                        <div style={{ fontSize: '11px', color: 'var(--color-on-surface-variant)' }}>
+                          Abonado: {formatCOP(d.currentAmount || 0)} de {formatCOP(d.targetAmount || 0)}
+                        </div>
+                      </div>
+                      <div
+                        style={{
+                          fontWeight: 700,
+                          color: rem > 0 ? 'var(--color-error)' : 'var(--color-success)',
+                          fontVariantNumeric: 'tabular-nums',
+                          flexShrink: 0,
+                        }}
+                      >
+                        {formatCOP(rem)}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             ) : (
               <p
@@ -745,53 +1204,29 @@ export default function Dashboard() {
           </Card>
         </Link>
 
-        {/* Partner Balance & Savings Row */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-          <Link href="/finanzas" style={{ textDecoration: 'none' }}>
-            <Card style={{ padding: '14px', height: '100%' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
-                <Scale size={16} color="var(--color-primary)" />
-                <span style={{ fontWeight: 700, fontSize: '13px' }}>Cuentas Pareja</span>
+        {/* Savings Goal Row */}
+        <Link href="/finanzas/metas" style={{ textDecoration: 'none' }}>
+          <Card style={{ padding: '14px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <PiggyBank size={18} color="var(--color-success)" />
+                <span style={{ fontWeight: 600, fontSize: '14px' }}>
+                  Metas de Ahorro ({savingsPct}%)
+                </span>
               </div>
-              {partnerBalance && partnerBalance.netAmountOwed > 0 ? (
-                <div>
-                  <div style={{ fontSize: '11px', color: 'var(--color-on-surface-variant)' }}>
-                    {partnerBalance.debtorName} debe a {partnerBalance.creditorName}
-                  </div>
-                  <div
-                    style={{
-                      fontSize: '15px',
-                      fontWeight: 800,
-                      color: 'var(--color-primary-dark)',
-                      marginTop: '2px',
-                    }}
-                  >
-                    {formatCOP(partnerBalance.netAmountOwed)}
-                  </div>
-                </div>
-              ) : (
-                <div style={{ fontSize: '12px', color: 'var(--color-success)', fontWeight: 600 }}>
-                  Al día (Paz y salvo)
-                </div>
-              )}
-            </Card>
-          </Link>
-
-          <Link href="/finanzas/metas" style={{ textDecoration: 'none' }}>
-            <Card style={{ padding: '14px', height: '100%' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
-                <PiggyBank size={16} color="var(--color-success)" />
-                <span style={{ fontWeight: 700, fontSize: '13px' }}>Metas ({savingsPct}%)</span>
+              <div
+                style={{
+                  fontSize: '14px',
+                  fontWeight: 700,
+                  color: 'var(--color-success)',
+                  fontVariantNumeric: 'tabular-nums',
+                }}
+              >
+                {formatCOP(totalSavingsCurrent)} / {formatCOP(totalSavingsTarget)}
               </div>
-              <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--color-success)' }}>
-                {formatCOP(totalSavingsCurrent)}
-              </div>
-              <div style={{ fontSize: '11px', color: 'var(--color-on-surface-variant)' }}>
-                Meta: {formatCOP(totalSavingsTarget)}
-              </div>
-            </Card>
-          </Link>
-        </div>
+            </div>
+          </Card>
+        </Link>
       </div>
 
       {/* Próximos Pagos e Ingresos Fijos Carousel */}
@@ -843,61 +1278,7 @@ export default function Dashboard() {
         </section>
       )}
 
-      {/* Shared Lists */}
-      <section className={styles.section}>
-        <div
-          className={styles.sectionHeader}
-          style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
-        >
-          <h3 className="text-headline-sm">Listas del Hogar</h3>
-          <Link href="/listas">
-            <Button variant="ghost" size="sm" style={{ color: 'var(--color-primary)' }}>
-              Ver todas
-            </Button>
-          </Link>
-        </div>
-
-        <div className={styles.listContainer}>
-          {isLoadingLists ? (
-            <div style={{ padding: '20px 0' }}>
-              <Spinner message="Cargando listas..." fullScreen={false} />
-            </div>
-          ) : lists.length === 0 ? (
-            <Card
-              style={{
-                textAlign: 'center',
-                padding: '28px 16px',
-                background: 'var(--color-surface-container-low)',
-              }}
-            >
-              <h4 className="text-headline-sm" style={{ marginBottom: '8px' }}>
-                Ninguna lista aún
-              </h4>
-              <p
-                className="text-body-sm"
-                style={{ color: 'var(--color-on-surface-variant)', marginBottom: '16px' }}
-              >
-                Organiza las compras del mercado o pendientes en pareja.
-              </p>
-              <Button
-                onClick={() => setIsListModalOpen(true)}
-                variant="primary"
-                style={{ margin: '0 auto' }}
-              >
-                Crear primera lista
-              </Button>
-            </Card>
-          ) : (
-            topLists.map((list) => (
-              <Link key={list.id} href={`/lista/${list.id}`} style={{ textDecoration: 'none' }}>
-                <ListSummaryCard list={list} styles={styles} />
-              </Link>
-            ))
-          )}
-        </div>
-      </section>
-
-      {/* SpeedDial with Direct Expense Modal (Section 7) */}
+      {/* SpeedDial with Direct Expense Modal */}
       <SpeedDial
         actions={[
           {
@@ -917,12 +1298,6 @@ export default function Dashboard() {
               setQuickModalType('income');
               setIsQuickModalOpen(true);
             },
-          },
-          {
-            name: 'Nueva Lista',
-            icon: <Receipt size={20} />,
-            color: '#3B82F6',
-            onClick: () => setIsListModalOpen(true),
           },
         ]}
       />
@@ -944,47 +1319,6 @@ export default function Dashboard() {
         onClose={() => setIsHouseholdConfigOpen(false)}
         initialTab="hogar"
       />
-
-      {/* Create List Modal */}
-      <Modal
-        isOpen={isListModalOpen}
-        onClose={() => !isCreatingList && setIsListModalOpen(false)}
-        title="Nueva Lista"
-      >
-        <form onSubmit={handleCreateList}>
-          <div style={{ marginBottom: '20px', marginTop: '12px' }}>
-            <Input
-              label="Nombre de la Lista"
-              placeholder="Ej. Supermercado, Dolarcity, Viaje..."
-              value={newListName}
-              onChange={(e) => setNewListName(e.target.value)}
-              autoFocus
-            />
-          </div>
-          <div style={{ marginBottom: '20px' }}>
-            <UserEmailAutocomplete value={shareEmail} onChange={setShareEmail} />
-          </div>
-          <div style={{ display: 'flex', gap: '12px' }}>
-            <Button
-              type="button"
-              variant="ghost"
-              fullWidth
-              onClick={() => setIsListModalOpen(false)}
-              disabled={isCreatingList}
-            >
-              Cancelar
-            </Button>
-            <Button
-              type="submit"
-              variant="primary"
-              fullWidth
-              disabled={!newListName.trim() || isCreatingList}
-            >
-              {isCreatingList ? 'Creando...' : 'Crear Lista'}
-            </Button>
-          </div>
-        </form>
-      </Modal>
 
       {/* Profile Modal */}
       <Modal

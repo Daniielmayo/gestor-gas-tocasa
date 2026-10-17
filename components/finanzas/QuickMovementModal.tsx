@@ -18,6 +18,7 @@ import {
   or,
   increment,
   arrayUnion,
+  onSnapshot,
 } from 'firebase/firestore';
 import { formatCOP, formatInputCOP, parseCOP } from '@/lib/currency';
 import {
@@ -27,6 +28,7 @@ import {
   EnhancedTransaction,
   IncomeFrequency,
   Scope,
+  UserPeriodWorksheet,
 } from '@/lib/models';
 import { uploadReceiptAttachment, deleteReceiptAttachment } from '@/lib/cloudinaryClient';
 import { evaluateBudgetStatus, checkNewBudgetAlerts, TriggeredBudgetAlert } from '@/lib/budgetEngine';
@@ -97,6 +99,31 @@ export function QuickMovementModal({
   const [isUploadingReceipt, setIsUploadingReceipt] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [autoSuggestedHint, setAutoSuggestedHint] = useState<string | null>(null);
+  const [worksheets, setWorksheets] = useState<UserPeriodWorksheet[]>([]);
+
+  useEffect(() => {
+    if (!user) return;
+    const hhId = household?.id || '';
+    const clauses: any[] = [
+      where('userId', '==', user.uid),
+      where('sharedWith', 'array-contains', user.uid),
+    ];
+    if (partnerUid) {
+      clauses.push(where('userId', '==', partnerUid));
+    }
+    if (hhId) {
+      clauses.push(where('householdId', '==', hhId));
+    }
+
+    const wsRef = collection(db, 'periodWorksheets');
+    const qWs = query(wsRef, or(...clauses));
+    const unsub = onSnapshot(qWs, (snap) => {
+      const list: UserPeriodWorksheet[] = [];
+      snap.forEach((d) => list.push({ ...(d.data() as UserPeriodWorksheet), id: d.id }));
+      setWorksheets(list);
+    });
+    return () => unsub();
+  }, [user, partnerUid, household?.id]);
 
   const activePaymentMethods = useMemo(
     () => paymentMethods.filter((pm) => pm.active !== false),
@@ -108,7 +135,131 @@ export function QuickMovementModal({
     [categories, txType]
   );
 
-  // Build known places dictionary combining pre-configured Comercios + historical transactions
+  const inferCategoryFromConcept = (concept: string): string => {
+    const low = concept.toLowerCase();
+    if (low.includes('arriendo') || low.includes('alquiler') || low.includes('admin')) {
+      return 'Arriendo / Vivienda';
+    }
+    if (
+      low.includes('luz') ||
+      low.includes('agua') ||
+      low.includes('gas') ||
+      low.includes('internet') ||
+      low.includes('epm') ||
+      low.includes('servicio') ||
+      low.includes('celular')
+    ) {
+      return 'Servicios Públicos';
+    }
+    if (low.includes('mercado') || low.includes('super')) {
+      return 'Supermercado';
+    }
+    if (low.includes('tarjeta') || low.includes('crédito') || low.includes('credito') || low.includes('deuda')) {
+      return 'Pago Deuda / Tarjeta';
+    }
+    return 'Servicios Públicos';
+  };
+
+  // Build unified list of configured Fixed Expenses (from all periodWorksheets + recurringPayments + activeBudgets)
+  const fixedExpenseOptions = useMemo(() => {
+    const items: Array<{
+      id: string;
+      concept: string;
+      amount: number;
+      category: string;
+      quincenaLabel: string;
+      ownerId: string;
+      ownerLabel: string;
+      scope: Scope;
+      recurringId?: string;
+    }> = [];
+    const seen = new Set<string>();
+
+    const myFirstName = profile?.displayName?.split(' ')[0] || 'Mío';
+    const partnerFirstName = partner?.displayName?.split(' ')[0] || 'Pareja';
+
+    // Sort worksheets so BASE-Q1 and BASE-Q2 come first, then newest monthly docs
+    const sortedWorksheets = [...worksheets].sort((a, b) => {
+      const aIsBase = a.periodKey.startsWith('BASE') ? 1 : 0;
+      const bIsBase = b.periodKey.startsWith('BASE') ? 1 : 0;
+      if (aIsBase !== bIsBase) return bIsBase - aIsBase;
+      return b.periodKey.localeCompare(a.periodKey);
+    });
+
+    for (const ws of sortedWorksheets) {
+      const uid = ws.userId || user?.uid || '';
+      const label =
+        uid === partnerUid
+          ? partnerFirstName
+          : ws.userName?.split(' ')[0] || myFirstName;
+      const qLabel = ws.periodKey.endsWith('Q1')
+        ? '1ª Qna (15)'
+        : ws.periodKey.endsWith('Q2')
+        ? '2ª Qna (30)'
+        : 'Mensual';
+
+      for (const ob of ws.obligations || []) {
+        const concept = (ob.concept || '').trim();
+        if (!concept) continue;
+        const key = `${uid}_${concept.toLowerCase()}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        items.push({
+          id: `ws_${ws.periodKey}_${ob.id || concept}`,
+          concept,
+          amount: Math.abs(Number(ob.amount || 0)),
+          category: inferCategoryFromConcept(concept),
+          quincenaLabel: qLabel,
+          ownerId: uid,
+          ownerLabel: label,
+          scope: 'personal',
+        });
+      }
+    }
+
+    for (const rp of recurringPayments || []) {
+      const title = (rp.title || rp.name || '').trim();
+      if (!title) continue;
+      const key = `rp_${title.toLowerCase()}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      items.push({
+        id: `rp_${rp.id}`,
+        concept: title,
+        amount: Math.abs(Number(rp.amount || 0)),
+        category: rp.category || inferCategoryFromConcept(title),
+        quincenaLabel: rp.dayOfMonth ? `Día ${rp.dayOfMonth}` : 'Mensual',
+        ownerId: rp.ownerId || user?.uid || '',
+        ownerLabel: rp.ownerId === partnerUid ? partnerFirstName : myFirstName,
+        scope: rp.sharedWith?.length > 0 ? 'conjunto' : 'personal',
+        recurringId: rp.id,
+      });
+    }
+
+    for (const b of activeBudgets || []) {
+      for (const line of b.lines || []) {
+        const title = (line.targetName || '').trim();
+        if (!title) continue;
+        const key = `bg_${title.toLowerCase()}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        items.push({
+          id: `bg_${b.id}_${line.id}`,
+          concept: title,
+          amount: Math.abs(Number(line.amount || 0)),
+          category: line.targetType === 'category' ? title : inferCategoryFromConcept(title),
+          quincenaLabel: b.periodType === 'quincenal' ? 'Quincenal' : 'Presupuesto',
+          ownerId: b.ownerId || user?.uid || '',
+          ownerLabel: b.ownerId === partnerUid ? partnerFirstName : myFirstName,
+          scope: b.scope === 'conjunto' ? 'conjunto' : 'personal',
+        });
+      }
+    }
+
+    return items;
+  }, [worksheets, recurringPayments, activeBudgets, user?.uid, partnerUid, profile?.displayName, partner?.displayName]);
+
+  // Build known places dictionary combining Fixed Expenses + pre-configured Comercios + historical transactions
   const placeKnowledge = useMemo(() => {
     const map = new Map<
       string,
@@ -118,18 +269,39 @@ export function QuickMovementModal({
         tags: string[];
         paymentMethodId?: string;
         scope?: Scope;
+        amount?: number;
+        ownerId?: string;
+        isFixedExpense?: boolean;
       }
     >();
+
+    for (const fe of fixedExpenseOptions) {
+      const key = fe.concept.toLowerCase();
+      if (!key) continue;
+      map.set(key, {
+        place: fe.concept,
+        category: fe.category,
+        tags: ['gasto-fijo'],
+        scope: fe.scope,
+        amount: fe.amount,
+        ownerId: fe.ownerId,
+        isFixedExpense: true,
+      });
+    }
 
     for (const kp of knownPlaces) {
       const key = kp.name.trim().toLowerCase();
       if (!key) continue;
+      const existing = map.get(key);
       map.set(key, {
         place: kp.name.trim(),
-        category: kp.defaultCategory,
-        tags: kp.defaultTags || [],
-        paymentMethodId: kp.defaultPaymentMethodId || undefined,
-        scope: kp.defaultScope,
+        category: kp.defaultCategory || existing?.category || 'Otros Gastos',
+        tags: kp.defaultTags?.length ? kp.defaultTags : existing?.tags || [],
+        paymentMethodId: kp.defaultPaymentMethodId || existing?.paymentMethodId || undefined,
+        scope: kp.defaultScope || existing?.scope,
+        amount: existing?.amount,
+        ownerId: existing?.ownerId,
+        isFixedExpense: existing?.isFixedExpense,
       });
     }
 
@@ -149,18 +321,35 @@ export function QuickMovementModal({
       }
     }
     return Array.from(map.values());
-  }, [knownPlaces, knownTransactions]);
+  }, [fixedExpenseOptions, knownPlaces, knownTransactions]);
 
   const matchingPlaces = useMemo(() => {
     if (txType === 'income') return [];
-    if (!place.trim()) {
-      return placeKnowledge.slice(0, 5);
-    }
-    const q = place.toLowerCase();
+    const q = place.trim().toLowerCase();
+    if (!q) return [];
     return placeKnowledge
       .filter((p) => p.place.toLowerCase().includes(q) && p.place.toLowerCase() !== q)
-      .slice(0, 5);
+      .slice(0, 6);
   }, [place, placeKnowledge, txType]);
+
+  const matchingCategories = useMemo(() => {
+    const q = category.trim().toLowerCase();
+    if (!q) return [];
+    return availableCategories
+      .filter((c) => c.name.toLowerCase().includes(q) && c.name.toLowerCase() !== q)
+      .slice(0, 6);
+  }, [category, availableCategories]);
+
+  const matchingTags = useMemo(() => {
+    const q = customTagInput.trim().toLowerCase().replace(/^#/, '');
+    if (!q) return [];
+    return tags
+      .filter(
+        (t) =>
+          t.name.toLowerCase().includes(q) && !selectedTags.includes(t.name.toLowerCase())
+      )
+      .slice(0, 6);
+  }, [customTagInput, tags, selectedTags]);
 
   useEffect(() => {
     if (!isOpen || !user) return;
@@ -194,8 +383,7 @@ export function QuickMovementModal({
       setTxType(initialType);
       setAmount('');
       setPlace('');
-      const defaultCat = categories.find((c) => c.type === initialType)?.name || '';
-      setCategory(defaultCat);
+      setCategory('');
       setScope('personal');
       setPaidByUserId(user.uid);
       const preferredPm =
@@ -215,14 +403,43 @@ export function QuickMovementModal({
     }
   }, [isOpen, editingTransaction, initialType, user]);
 
+  const handleSelectFixedExpense = (fe: (typeof fixedExpenseOptions)[number]) => {
+    setPlace(fe.concept);
+    if (fe.amount > 0) {
+      setAmount(formatInputCOP(String(fe.amount)));
+    }
+    if (fe.category) {
+      setCategory(fe.category);
+    }
+    if (fe.ownerId) {
+      setPaidByUserId(fe.ownerId);
+    }
+    if (fe.scope) {
+      setScope(fe.scope);
+    }
+    if (fe.recurringId) {
+      setSelectedRecurringId(fe.recurringId);
+    }
+    if (!selectedTags.includes('gasto-fijo')) {
+      setSelectedTags((prev) => Array.from(new Set([...prev, 'gasto-fijo'])));
+    }
+    setAutoSuggestedHint(`Gasto fijo "${fe.concept}" cargado`);
+  };
+
   const handleSelectPlaceSuggestion = (suggestion: {
     place: string;
     category: string;
     tags: string[];
     paymentMethodId?: string;
     scope?: Scope;
+    amount?: number;
+    ownerId?: string;
+    isFixedExpense?: boolean;
   }) => {
     setPlace(suggestion.place);
+    if (suggestion.amount && suggestion.amount > 0 && !amount) {
+      setAmount(formatInputCOP(String(suggestion.amount)));
+    }
     if (suggestion.category) setCategory(suggestion.category);
     if (suggestion.tags?.length) {
       setSelectedTags(Array.from(new Set([...selectedTags, ...suggestion.tags])));
@@ -233,7 +450,14 @@ export function QuickMovementModal({
     if (suggestion.scope) {
       setScope(suggestion.scope);
     }
-    setAutoSuggestedHint(`Autocompletado desde "${suggestion.place}"`);
+    if (suggestion.ownerId) {
+      setPaidByUserId(suggestion.ownerId);
+    }
+    setAutoSuggestedHint(
+      suggestion.isFixedExpense
+        ? `Gasto fijo "${suggestion.place}" cargado`
+        : `Autocompletado desde "${suggestion.place}"`
+    );
   };
 
   const handleSelectIncomeSource = (src: (typeof incomeSources)[number]) => {
@@ -293,7 +517,10 @@ export function QuickMovementModal({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!user || !amount || !category || isSubmitting) return;
+    if (!user || !amount || isSubmitting) return;
+    const resolvedCategory =
+      category.trim() ||
+      (txType === 'income' ? 'Sueldo / Quincena' : 'Otros Gastos');
 
     setIsSubmitting(true);
     try {
@@ -306,22 +533,20 @@ export function QuickMovementModal({
           ? profile?.displayName?.split(' ')[0] || 'Yo'
           : partner?.displayName?.split(' ')[0] || 'Pareja';
 
-      const sharedWithArray =
-        scope === 'conjunto' && partnerUid
-          ? [partnerUid]
-          : partnerUid && household?.personalVisibility === 'full_detail'
-          ? [partnerUid]
-          : [];
+      const otherHouseholdMembers = (household?.memberIds || []).filter((id) => id !== user.uid);
+      const sharedWithArray = Array.from(
+        new Set([...(partnerUid ? [partnerUid] : []), ...otherHouseholdMembers])
+      );
 
       const selectedRecurring = recurringPayments.find((p) => p.id === selectedRecurringId);
 
       const payload: Record<string, any> = {
         type: txType,
         amount: numericAmount,
-        category,
-        place: place.trim() || category,
-        description: place.trim() || note.trim() || category,
-        title: place.trim() || category,
+        category: resolvedCategory,
+        place: place.trim() || resolvedCategory,
+        description: place.trim() || note.trim() || resolvedCategory,
+        title: place.trim() || resolvedCategory,
         note: note.trim(),
         scope,
         paidByUserId: payerUid,
@@ -371,8 +596,8 @@ export function QuickMovementModal({
         txType === 'expense' &&
         chosenPm &&
         chosenPm.type === 'credito' &&
-        category !== 'Pago Deuda / Tarjeta' &&
-        !category.startsWith('Abono a Deuda')
+        resolvedCategory !== 'Pago Deuda / Tarjeta' &&
+        !resolvedCategory.startsWith('Abono a Deuda')
       ) {
         try {
           const debtsRef = collection(db, 'debts');
@@ -382,9 +607,9 @@ export function QuickMovementModal({
           const chargeEntry: DebtChargeLog = {
             id: `ch_${Date.now()}`,
             amount: numericAmount,
-            note: note.trim() || place.trim() || category,
-            category,
-            place: place.trim() || category,
+            note: note.trim() || place.trim() || resolvedCategory,
+            category: resolvedCategory,
+            place: place.trim() || resolvedCategory,
             spentByUserId: payerUid,
             spentByName: payerName,
             transactionId: savedDocId,
@@ -507,7 +732,7 @@ export function QuickMovementModal({
           : 'Registrar Movimiento Rápido'
       }
     >
-      <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginTop: '8px' }}>
+      <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '6px' }}>
         {/* Type Switcher (Gasto / Ingreso) */}
         {!editingTransaction && (
           <div
@@ -516,7 +741,7 @@ export function QuickMovementModal({
               gridTemplateColumns: '1fr 1fr',
               background: 'var(--color-surface-container)',
               padding: '4px',
-              borderRadius: '12px',
+              borderRadius: '9999px',
               gap: '4px',
             }}
           >
@@ -524,13 +749,13 @@ export function QuickMovementModal({
               type="button"
               onClick={() => {
                 setTxType('expense');
-                setCategory(categories.find((c) => c.type === 'expense')?.name || 'Supermercado');
+                setCategory('');
               }}
               style={{
-                padding: '10px',
-                borderRadius: '10px',
+                padding: '9px',
+                borderRadius: '9999px',
                 fontWeight: 600,
-                fontSize: '14px',
+                fontSize: '13px',
                 backgroundColor: txType === 'expense' ? 'var(--color-error)' : 'transparent',
                 color: txType === 'expense' ? '#FFF' : 'var(--color-on-surface-variant)',
               }}
@@ -541,13 +766,13 @@ export function QuickMovementModal({
               type="button"
               onClick={() => {
                 setTxType('income');
-                setCategory(categories.find((c) => c.type === 'income')?.name || 'Sueldo / Quincena');
+                setCategory('');
               }}
               style={{
-                padding: '10px',
-                borderRadius: '10px',
+                padding: '9px',
+                borderRadius: '9999px',
                 fontWeight: 600,
-                fontSize: '14px',
+                fontSize: '13px',
                 backgroundColor: txType === 'income' ? 'var(--color-success)' : 'transparent',
                 color: txType === 'income' ? '#FFF' : 'var(--color-on-surface-variant)',
               }}
@@ -578,112 +803,369 @@ export function QuickMovementModal({
           />
         </div>
 
-        {/* 2. Lugar / Fuente con autocompletado inteligente */}
-        <div style={{ position: 'relative' }}>
-          <Input
-            label={txType === 'expense' ? 'Lugar o Comercio' : 'Fuente / Concepto'}
-            placeholder={
-              txType === 'expense'
-                ? 'Ej. Éxito, Dolarcity, Crepes, Ara...'
-                : 'Ej. Quincena Empresa, Cliente Freelance...'
-            }
-            value={place}
-            onChange={(e) => {
-              setPlace(e.target.value);
-              setAutoSuggestedHint(null);
-            }}
-          />
-          {autoSuggestedHint && (
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '4px',
-                fontSize: '11px',
-                color: 'var(--color-primary)',
-                marginTop: '4px',
-                fontWeight: 500,
-              }}
-            >
-              <Sparkles size={12} />
-              <span>{autoSuggestedHint}</span>
+        {/* 2. Lugar / Comercio (con opciones flotantes y Gastos Fijos rápidos) o Desplegable de Empresa / Fuente de Ingreso */}
+        {txType === 'expense' ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            <div>
+              <label
+                className="text-label-sm"
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  marginBottom: '4px',
+                  color: 'var(--color-primary-dark)',
+                  fontWeight: 600,
+                }}
+              >
+                <Sparkles size={12} />
+                <span>Autocompletar desde Gasto Fijo (Opcional)</span>
+              </label>
+              <select
+                value={fixedExpenseOptions.find((f) => f.concept === place)?.id || ''}
+                onChange={(e) => {
+                  const found = fixedExpenseOptions.find((f) => f.id === e.target.value);
+                  if (found) {
+                    handleSelectFixedExpense(found);
+                  }
+                }}
+                style={{
+                  width: '100%',
+                  padding: '9px 12px',
+                  borderRadius: '10px',
+                  border: '1px dashed var(--color-primary)',
+                  backgroundColor: 'rgba(59, 130, 246, 0.06)',
+                  color: 'var(--color-primary-dark)',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                <option value="">
+                  {fixedExpenseOptions.length > 0
+                    ? `— Seleccionar Gasto Fijo (${fixedExpenseOptions.length} disponibles) —`
+                    : '— Aún no tienes Gastos Fijos configurados en Pagos —'}
+                </option>
+                {fixedExpenseOptions.map((fe) => (
+                  <option key={fe.id} value={fe.id}>
+                    {fe.concept} — {formatCOP(fe.amount)} • {fe.quincenaLabel}
+                    {partner ? ` (${fe.ownerLabel})` : ''}
+                  </option>
+                ))}
+              </select>
             </div>
-          )}
-          {txType === 'expense' && matchingPlaces.length > 0 && (
-            <div
-              style={{
-                display: 'flex',
-                gap: '6px',
-                flexWrap: 'wrap',
-                marginTop: '6px',
-              }}
-            >
-              {matchingPlaces.map((sug) => (
-                <button
-                  key={sug.place}
-                  type="button"
-                  onClick={() => handleSelectPlaceSuggestion(sug)}
+
+            <div style={{ position: 'relative' }}>
+              <Input
+                label="Lugar, Comercio o Concepto"
+                placeholder="Escribe para buscar comercio o gasto fijo (ej. Arriendo, Éxito...)"
+                value={place}
+                onChange={(e) => {
+                  setPlace(e.target.value);
+                  setAutoSuggestedHint(null);
+                }}
+              />
+              {autoSuggestedHint && (
+                <div
                   style={{
+                    position: 'absolute',
+                    top: 0,
+                    right: 0,
                     display: 'inline-flex',
                     alignItems: 'center',
                     gap: '4px',
-                    padding: '4px 10px',
-                    borderRadius: '999px',
-                    fontSize: '12px',
-                    background: 'var(--color-primary-container)',
-                    color: 'var(--color-primary-dark)',
-                    border: '1px solid rgba(59, 130, 246, 0.25)',
+                    fontSize: '10px',
+                    color: 'var(--color-primary)',
+                    fontWeight: 600,
                   }}
                 >
-                  <MapPin size={11} />
-                  <span>{sug.place}</span>
-                  <span style={{ opacity: 0.75 }}>({sug.category})</span>
-                </button>
-              ))}
-            </div>
-          )}
-          {txType === 'income' && incomeSources.length > 0 && (
-            <div
-              style={{
-                display: 'flex',
-                gap: '6px',
-                flexWrap: 'wrap',
-                marginTop: '6px',
-              }}
-            >
-              {incomeSources.map((src) => (
-                <button
-                  key={src.id}
-                  type="button"
-                  onClick={() => handleSelectIncomeSource(src)}
+                  <Sparkles size={11} />
+                  <span>{autoSuggestedHint}</span>
+                </div>
+              )}
+              {matchingPlaces.length > 0 && (
+                <div
                   style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '4px',
-                    padding: '4px 10px',
-                    borderRadius: '999px',
-                    fontSize: '12px',
-                    background: 'rgba(16, 185, 129, 0.12)',
-                    color: '#065F46',
-                    border: '1px solid rgba(16, 185, 129, 0.3)',
+                    position: 'absolute',
+                    top: 'calc(100% + 4px)',
+                    left: 0,
+                    right: 0,
+                    zIndex: 60,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '2px',
+                    padding: '6px',
+                    borderRadius: '12px',
+                    backgroundColor: 'var(--color-surface-container-lowest)',
+                    border: '1px solid var(--color-outline-variant)',
+                    boxShadow: '0 10px 25px rgba(15, 23, 42, 0.16)',
+                    maxHeight: '180px',
+                    overflowY: 'auto',
                   }}
                 >
-                  <span>{src.name}</span>
-                  {src.defaultAmount ? (
-                    <span style={{ fontWeight: 600 }}>({formatCOP(src.defaultAmount)})</span>
-                  ) : null}
-                </button>
-              ))}
+                  {matchingPlaces.map((sug) => (
+                    <button
+                      key={sug.place}
+                      type="button"
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        handleSelectPlaceSuggestion(sug);
+                      }}
+                      onClick={() => handleSelectPlaceSuggestion(sug)}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '6px',
+                        padding: '7px 10px',
+                        fontSize: '12px',
+                        textAlign: 'left',
+                        color: 'var(--color-on-surface)',
+                      }}
+                    >
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', fontWeight: 600 }}>
+                        {sug.isFixedExpense ? (
+                          <Sparkles size={12} color="var(--color-primary)" />
+                        ) : (
+                          <MapPin size={12} color="var(--color-primary)" />
+                        )}
+                        {sug.place}
+                        {sug.isFixedExpense && (
+                          <span
+                            style={{
+                              fontSize: '9px',
+                              padding: '1px 5px',
+                              borderRadius: '999px',
+                              backgroundColor: 'rgba(59, 130, 246, 0.14)',
+                              color: 'var(--color-primary-dark)',
+                              fontWeight: 700,
+                            }}
+                          >
+                            FIJO
+                          </span>
+                        )}
+                      </span>
+                      <span style={{ fontSize: '11px', color: 'var(--color-on-surface-variant)' }}>
+                        {sug.amount ? `${formatCOP(sug.amount)} · ` : ''}
+                        {sug.category}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
-          )}
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {incomeSources.length > 0 && (
+              <div>
+                <label
+                  className="text-label-sm"
+                  style={{ display: 'block', marginBottom: '4px', color: 'var(--color-on-surface-variant)' }}
+                >
+                  Empresa / Fuente de Ingreso configurada (Rápido)
+                </label>
+                <select
+                  value={incomeSources.find((s) => s.name === place)?.id || ''}
+                  onChange={(e) => {
+                    const found = incomeSources.find((s) => s.id === e.target.value);
+                    if (found) {
+                      handleSelectIncomeSource(found);
+                    }
+                  }}
+                  style={{
+                    width: '100%',
+                    padding: '10px 12px',
+                    borderRadius: '10px',
+                    border: '1px solid var(--color-outline-variant)',
+                    backgroundColor: 'var(--color-surface-container-lowest)',
+                    color: 'var(--color-on-surface)',
+                    fontSize: '13px',
+                  }}
+                >
+                  <option value="">— Seleccionar empresa o fuente configurada —</option>
+                  {incomeSources.map((src) => (
+                    <option key={src.id} value={src.id}>
+                      {src.name}
+                      {src.defaultAmount ? ` (${formatCOP(src.defaultAmount)})` : ''} •{' '}
+                      {src.type.toUpperCase()}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+            <Input
+              label="Empresa / Concepto del Ingreso"
+              placeholder="Ej. Nómina Empresa, Cliente Freelance..."
+              value={place}
+              onChange={(e) => {
+                setPlace(e.target.value);
+                setAutoSuggestedHint(null);
+              }}
+            />
+          </div>
+        )}
+
+        {/* 3. Categoría y Tags en fila compacta con sugerencias flotantes por encima */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', alignItems: 'start' }}>
+          {/* Categoría con autocompletado flotante al escribir */}
+          <div style={{ position: 'relative' }}>
+            <Input
+              label="Categoría"
+              placeholder={
+                txType === 'expense' ? 'Escribe ej. Supermercado...' : 'Escribe ej. Sueldo...'
+              }
+              value={category}
+              onChange={(e) => setCategory(e.target.value)}
+            />
+            {matchingCategories.length > 0 && (
+              <div
+                style={{
+                  position: 'absolute',
+                  top: 'calc(100% + 4px)',
+                  left: 0,
+                  right: 0,
+                  zIndex: 60,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '2px',
+                  padding: '6px',
+                  borderRadius: '12px',
+                  backgroundColor: 'var(--color-surface-container-lowest)',
+                  border: '1px solid var(--color-outline-variant)',
+                  boxShadow: '0 10px 25px rgba(15, 23, 42, 0.16)',
+                  maxHeight: '180px',
+                  overflowY: 'auto',
+                }}
+              >
+                {matchingCategories.map((cat) => (
+                  <button
+                    key={cat.id}
+                    type="button"
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      setCategory(cat.name);
+                    }}
+                    onClick={() => setCategory(cat.name)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      padding: '6px 8px',
+                      fontSize: '12px',
+                      textAlign: 'left',
+                      color: 'var(--color-on-surface)',
+                    }}
+                  >
+                    <span
+                      style={{
+                        width: '8px',
+                        height: '8px',
+                        borderRadius: '999px',
+                        backgroundColor: cat.color,
+                        flexShrink: 0,
+                      }}
+                    />
+                    <span style={{ fontWeight: 500 }}>{cat.name}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Tags con autocompletado flotante al escribir */}
+          <div style={{ position: 'relative' }}>
+            <Input
+              label="Tags (#opcional)"
+              placeholder="Escribe ej. mercado..."
+              value={customTagInput}
+              onChange={(e) => setCustomTagInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  handleAddCustomTag();
+                }
+              }}
+            />
+            {matchingTags.length > 0 && (
+              <div
+                style={{
+                  position: 'absolute',
+                  top: 'calc(100% + 4px)',
+                  left: 0,
+                  right: 0,
+                  zIndex: 60,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '2px',
+                  padding: '6px',
+                  borderRadius: '12px',
+                  backgroundColor: 'var(--color-surface-container-lowest)',
+                  border: '1px solid var(--color-outline-variant)',
+                  boxShadow: '0 10px 25px rgba(15, 23, 42, 0.16)',
+                  maxHeight: '180px',
+                  overflowY: 'auto',
+                }}
+              >
+                {matchingTags.map((t) => (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      toggleTag(t.name);
+                      setCustomTagInput('');
+                    }}
+                    onClick={() => {
+                      toggleTag(t.name);
+                      setCustomTagInput('');
+                    }}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      padding: '6px 8px',
+                      fontSize: '12px',
+                      textAlign: 'left',
+                      color: 'var(--color-primary-dark)',
+                      fontWeight: 500,
+                    }}
+                  >
+                    #{t.name}
+                  </button>
+                ))}
+              </div>
+            )}
+            {selectedTags.length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '6px' }}>
+                {selectedTags.map((st) => (
+                  <button
+                    key={st}
+                    type="button"
+                    onClick={() => toggleTag(st)}
+                    style={{
+                      padding: '2px 8px',
+                      fontSize: '11px',
+                      fontWeight: 600,
+                      backgroundColor: 'rgba(59, 130, 246, 0.15)',
+                      color: 'var(--color-primary-dark)',
+                      border: '1px solid var(--color-primary)',
+                    }}
+                  >
+                    #{st} ×
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
 
-        {/* 3. Ámbito (Conjunto vs Personal) + Quién pagó/recibió */}
+        {/* 4. Ámbito (Conjunto vs Personal) + Quién pagó/recibió */}
         <div style={{ display: 'grid', gridTemplateColumns: partner ? '1fr 1fr' : '1fr', gap: '10px' }}>
           <div>
             <label
               className="text-label-sm"
-              style={{ display: 'block', marginBottom: '6px', color: 'var(--color-on-surface-variant)' }}
+              style={{ display: 'block', marginBottom: '4px', color: 'var(--color-on-surface-variant)' }}
             >
               Ámbito
             </label>
@@ -693,7 +1175,7 @@ export function QuickMovementModal({
                 gridTemplateColumns: '1fr 1fr',
                 background: 'var(--color-surface-container-low)',
                 padding: '3px',
-                borderRadius: '10px',
+                borderRadius: '9999px',
                 border: '1px solid var(--color-outline-variant)',
               }}
             >
@@ -705,8 +1187,7 @@ export function QuickMovementModal({
                   alignItems: 'center',
                   justifyContent: 'center',
                   gap: '4px',
-                  padding: '8px 6px',
-                  borderRadius: '8px',
+                  padding: '7px 6px',
                   fontSize: '12px',
                   fontWeight: scope === 'conjunto' ? 600 : 500,
                   backgroundColor: scope === 'conjunto' ? 'var(--color-primary)' : 'transparent',
@@ -724,8 +1205,7 @@ export function QuickMovementModal({
                   alignItems: 'center',
                   justifyContent: 'center',
                   gap: '4px',
-                  padding: '8px 6px',
-                  borderRadius: '8px',
+                  padding: '7px 6px',
                   fontSize: '12px',
                   fontWeight: scope === 'personal' ? 600 : 500,
                   backgroundColor: scope === 'personal' ? 'var(--color-primary)' : 'transparent',
@@ -742,7 +1222,7 @@ export function QuickMovementModal({
             <div>
               <label
                 className="text-label-sm"
-                style={{ display: 'block', marginBottom: '6px', color: 'var(--color-on-surface-variant)' }}
+                style={{ display: 'block', marginBottom: '4px', color: 'var(--color-on-surface-variant)' }}
               >
                 {txType === 'expense' ? '¿Quién pagó?' : '¿Quién recibió?'}
               </label>
@@ -752,7 +1232,7 @@ export function QuickMovementModal({
                   gridTemplateColumns: '1fr 1fr',
                   background: 'var(--color-surface-container-low)',
                   padding: '3px',
-                  borderRadius: '10px',
+                  borderRadius: '9999px',
                   border: '1px solid var(--color-outline-variant)',
                 }}
               >
@@ -760,8 +1240,7 @@ export function QuickMovementModal({
                   type="button"
                   onClick={() => setPaidByUserId(user?.uid || '')}
                   style={{
-                    padding: '8px 6px',
-                    borderRadius: '8px',
+                    padding: '7px 6px',
                     fontSize: '12px',
                     fontWeight: paidByUserId === user?.uid ? 600 : 500,
                     backgroundColor: paidByUserId === user?.uid ? '#1F2937' : 'transparent',
@@ -774,8 +1253,7 @@ export function QuickMovementModal({
                   type="button"
                   onClick={() => setPaidByUserId(partner.uid)}
                   style={{
-                    padding: '8px 6px',
-                    borderRadius: '8px',
+                    padding: '7px 6px',
                     fontSize: '12px',
                     fontWeight: paidByUserId === partner.uid ? 600 : 500,
                     backgroundColor: paidByUserId === partner.uid ? '#1F2937' : 'transparent',
@@ -789,48 +1267,6 @@ export function QuickMovementModal({
           )}
         </div>
 
-        {/* 4. Categoría (Chips visuales rápidos) */}
-        <div>
-          <label
-            className="text-label-sm"
-            style={{ display: 'block', marginBottom: '6px', color: 'var(--color-on-surface-variant)' }}
-          >
-            Categoría Principal
-          </label>
-          <div
-            style={{
-              display: 'flex',
-              gap: '6px',
-              overflowX: 'auto',
-              paddingBottom: '6px',
-            }}
-          >
-            {availableCategories.map((cat) => {
-              const selected = category === cat.name;
-              return (
-                <button
-                  key={cat.id}
-                  type="button"
-                  onClick={() => setCategory(cat.name)}
-                  style={{
-                    flex: '0 0 auto',
-                    padding: '7px 12px',
-                    borderRadius: '999px',
-                    fontSize: '13px',
-                    fontWeight: selected ? 600 : 500,
-                    backgroundColor: selected ? cat.color : 'var(--color-surface-container-low)',
-                    color: selected ? '#FFF' : 'var(--color-on-surface)',
-                    border: selected ? `1px solid ${cat.color}` : '1px solid var(--color-outline-variant)',
-                    transition: 'all 0.15s ease',
-                  }}
-                >
-                  {cat.name}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
         {/* 5. Método de pago (RF-02) o Tipo de Ingreso (RF-05) */}
         {txType === 'expense' ? (
           <div>
@@ -840,7 +1276,7 @@ export function QuickMovementModal({
                 display: 'flex',
                 alignItems: 'center',
                 gap: '4px',
-                marginBottom: '6px',
+                marginBottom: '4px',
                 color: 'var(--color-on-surface-variant)',
               }}
             >
@@ -852,12 +1288,12 @@ export function QuickMovementModal({
               onChange={(e) => setPaymentMethodId(e.target.value)}
               style={{
                 width: '100%',
-                padding: '10px 12px',
+                padding: '9px 12px',
                 borderRadius: '10px',
                 border: '1px solid var(--color-outline-variant)',
                 backgroundColor: 'var(--color-surface-container-lowest)',
                 color: 'var(--color-on-surface)',
-                fontSize: '14px',
+                fontSize: '13px',
               }}
             >
               <option value="">Sin especificar</option>
@@ -875,7 +1311,7 @@ export function QuickMovementModal({
             <div>
               <label
                 className="text-label-sm"
-                style={{ display: 'block', marginBottom: '6px', color: 'var(--color-on-surface-variant)' }}
+                style={{ display: 'block', marginBottom: '4px', color: 'var(--color-on-surface-variant)' }}
               >
                 Tipo de Ingreso
               </label>
@@ -884,11 +1320,11 @@ export function QuickMovementModal({
                 onChange={(e) => setIncomeType(e.target.value as 'fijo' | 'variable')}
                 style={{
                   width: '100%',
-                  padding: '10px 12px',
+                  padding: '9px 12px',
                   borderRadius: '10px',
                   border: '1px solid var(--color-outline-variant)',
                   backgroundColor: 'var(--color-surface-container-lowest)',
-                  fontSize: '14px',
+                  fontSize: '13px',
                 }}
               >
                 <option value="fijo">Fijo (Salario / Arriendo)</option>
@@ -898,7 +1334,7 @@ export function QuickMovementModal({
             <div>
               <label
                 className="text-label-sm"
-                style={{ display: 'block', marginBottom: '6px', color: 'var(--color-on-surface-variant)' }}
+                style={{ display: 'block', marginBottom: '4px', color: 'var(--color-on-surface-variant)' }}
               >
                 Frecuencia
               </label>
@@ -907,11 +1343,11 @@ export function QuickMovementModal({
                 onChange={(e) => setIncomeFrequency(e.target.value as IncomeFrequency)}
                 style={{
                   width: '100%',
-                  padding: '10px 12px',
+                  padding: '9px 12px',
                   borderRadius: '10px',
                   border: '1px solid var(--color-outline-variant)',
                   backgroundColor: 'var(--color-surface-container-lowest)',
-                  fontSize: '14px',
+                  fontSize: '13px',
                 }}
               >
                 <option value="quincenal">Quincenal</option>
@@ -921,90 +1357,6 @@ export function QuickMovementModal({
             </div>
           </div>
         )}
-
-        {/* 6. Tags transversales (RF-04) */}
-        <div>
-          <label
-            className="text-label-sm"
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '4px',
-              marginBottom: '6px',
-              color: 'var(--color-on-surface-variant)',
-            }}
-          >
-            <TagIcon size={13} />
-            <span>Tags (#mercado, #dolarcity, #vacaciones...)</span>
-          </label>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '6px' }}>
-            {tags.map((t) => {
-              const active = selectedTags.includes(t.name.toLowerCase());
-              return (
-                <button
-                  key={t.id}
-                  type="button"
-                  onClick={() => toggleTag(t.name)}
-                  style={{
-                    padding: '4px 10px',
-                    borderRadius: '999px',
-                    fontSize: '12px',
-                    fontWeight: active ? 600 : 400,
-                    backgroundColor: active ? 'rgba(59, 130, 246, 0.15)' : 'var(--color-surface-container-low)',
-                    color: active ? 'var(--color-primary-dark)' : 'var(--color-on-surface-variant)',
-                    border: active ? '1px solid var(--color-primary)' : '1px solid transparent',
-                  }}
-                >
-                  #{t.name}
-                </button>
-              );
-            })}
-            {selectedTags
-              .filter((st) => !tags.some((t) => t.name.toLowerCase() === st))
-              .map((custom) => (
-                <button
-                  key={custom}
-                  type="button"
-                  onClick={() => toggleTag(custom)}
-                  style={{
-                    padding: '4px 10px',
-                    borderRadius: '999px',
-                    fontSize: '12px',
-                    fontWeight: 600,
-                    backgroundColor: 'rgba(59, 130, 246, 0.15)',
-                    color: 'var(--color-primary-dark)',
-                    border: '1px solid var(--color-primary)',
-                  }}
-                >
-                  #{custom} ×
-                </button>
-              ))}
-          </div>
-          <div style={{ display: 'flex', gap: '6px' }}>
-            <input
-              type="text"
-              placeholder="Agregar otro tag (ej. regalo)..."
-              value={customTagInput}
-              onChange={(e) => setCustomTagInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault();
-                  handleAddCustomTag();
-                }
-              }}
-              style={{
-                flex: 1,
-                padding: '7px 10px',
-                borderRadius: '8px',
-                border: '1px solid var(--color-outline-variant)',
-                fontSize: '12px',
-              }}
-            />
-            <Button type="button" variant="secondary" size="sm" onClick={handleAddCustomTag}>
-              + Tag
-            </Button>
-          </div>
-        </div>
 
         {/* 7. Comprobante / Cámara (RF-06) + Nota opcional */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: '8px', alignItems: 'end' }}>
@@ -1098,7 +1450,7 @@ export function QuickMovementModal({
             type="submit"
             variant="primary"
             fullWidth
-            disabled={!amount || !category || isSubmitting || isUploadingReceipt}
+            disabled={!amount || isSubmitting || isUploadingReceipt}
           >
             {isSubmitting ? 'Guardando...' : editingTransaction ? 'Actualizar' : 'Guardar'}
           </Button>

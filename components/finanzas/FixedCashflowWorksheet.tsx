@@ -26,13 +26,8 @@ import { formatCOP, formatInputCOP, parseCOP } from '@/lib/currency';
 import {
   Plus,
   Trash2,
-  Users,
-  User,
   CheckCircle2,
   Circle,
-  Sparkles,
-  Wallet,
-  Calendar,
   TrendingUp,
   TrendingDown,
   Pencil,
@@ -49,15 +44,12 @@ interface FixedCashflowWorksheetProps {
 export function FixedCashflowWorksheet({
   currentDate,
   quincenaFilter,
-  onChangeQuincenaFilter,
   periodTransactions,
-  recurringPayments,
 }: FixedCashflowWorksheetProps) {
   const { user, profile } = useAuth();
-  const { household, partner, partnerUid, incomeSources } = useHousehold();
+  const { household, partner, partnerUid, globalScope, incomeSources } = useHousehold();
 
   const [worksheets, setWorksheets] = useState<UserPeriodWorksheet[]>([]);
-  const [selectedView, setSelectedView] = useState<'me' | 'partner' | 'consolidated'>('me');
 
   // Popup Modal states for adding Fixed Income or Fixed Expense
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
@@ -74,48 +66,81 @@ export function FixedCashflowWorksheet({
     return `${y}-${m}`;
   }, [currentDate]);
 
-  const periodLabel = useMemo(() => {
-    const monthName = currentDate.toLocaleDateString('es-CO', { month: 'short' }).toUpperCase();
-    if (quincenaFilter === 'q1') return `15 ${monthName} (1ª Quincena)`;
-    if (quincenaFilter === 'q2') return `30 ${monthName} (2ª Quincena)`;
-    return `Mes Completo (${monthName})`;
-  }, [currentDate, quincenaFilter]);
-
   useEffect(() => {
     if (!user) return;
+    const hhId = household?.id || '';
+    const clauses: any[] = [
+      where('userId', '==', user.uid),
+      where('sharedWith', 'array-contains', user.uid),
+    ];
+    if (partnerUid) {
+      clauses.push(where('userId', '==', partnerUid));
+    }
+    if (hhId) {
+      clauses.push(where('householdId', '==', hhId));
+    }
+
     const wsRef = collection(db, 'periodWorksheets');
-    const qWs = query(
-      wsRef,
-      or(where('userId', '==', user.uid), where('sharedWith', 'array-contains', user.uid))
-    );
+    const qWs = query(wsRef, or(...clauses));
     const unsub = onSnapshot(qWs, (snap) => {
       const list: UserPeriodWorksheet[] = [];
       snap.forEach((d) => list.push({ ...(d.data() as UserPeriodWorksheet), id: d.id }));
       setWorksheets(list);
     });
     return () => unsub();
-  }, [user]);
+  }, [user, partnerUid, household?.id]);
 
   const myName = profile?.displayName?.split(' ')[0] || 'Mío';
   const partnerName = partner?.displayName?.split(' ')[0] || 'Pareja';
 
+  // Sync automatically with globalScope ('mio', 'pareja', 'conjunto', 'todo')
+  const isConsolidatedView = globalScope === 'conjunto' || globalScope === 'todo';
   const activeTargetUid =
-    selectedView === 'partner' && partnerUid ? partnerUid : user?.uid || '';
-  const activeTargetName = selectedView === 'partner' ? partnerName : myName;
+    globalScope === 'pareja' && partnerUid ? partnerUid : user?.uid || '';
+  const activeTargetName = globalScope === 'pareja' ? partnerName : myName;
 
   const getUserPeriodDocs = (uid: string) => {
+    const wsBaseQ1 =
+      worksheets.find((w) => w.userId === uid && w.periodKey === 'BASE-Q1') || null;
+    const wsBaseQ2 =
+      worksheets.find((w) => w.userId === uid && w.periodKey === 'BASE-Q2') || null;
     const wsQ1 =
       worksheets.find((w) => w.userId === uid && w.periodKey === `${yearMonthPrefix}-Q1`) || null;
     const wsQ2 =
       worksheets.find((w) => w.userId === uid && w.periodKey === `${yearMonthPrefix}-Q2`) || null;
     const wsMonth =
       worksheets.find((w) => w.userId === uid && w.periodKey === yearMonthPrefix) || null;
-    return { wsQ1, wsQ2, wsMonth };
+
+    // Fallback to the latest existing Q1/Q2 doc if BASE-Q1/BASE-Q2 has not been written yet
+    const latestLegacyQ1 =
+      wsBaseQ1 ||
+      wsQ1 ||
+      worksheets
+        .filter((w) => w.userId === uid && w.periodKey.endsWith('-Q1'))
+        .sort((a, b) => b.periodKey.localeCompare(a.periodKey))[0] ||
+      null;
+
+    const latestLegacyQ2 =
+      wsBaseQ2 ||
+      wsQ2 ||
+      worksheets
+        .filter((w) => w.userId === uid && w.periodKey.endsWith('-Q2'))
+        .sort((a, b) => b.periodKey.localeCompare(a.periodKey))[0] ||
+      null;
+
+    return {
+      wsBaseQ1,
+      wsBaseQ2,
+      wsQ1,
+      wsQ2,
+      wsMonth,
+      effectiveQ1: wsBaseQ1 || latestLegacyQ1,
+      effectiveQ2: wsBaseQ2 || latestLegacyQ2,
+    };
   };
 
-  // Compute Quincenal (Q1 & Q2) and Monthly Weighted (Ponderado Mensual) Fixed Income & Obligations per user
   const computeMonthlyQuincenaWeighted = (uid: string) => {
-    const { wsQ1, wsQ2, wsMonth } = getUserPeriodDocs(uid);
+    const { effectiveQ1, effectiveQ2, wsMonth } = getUserPeriodDocs(uid);
 
     const userFixedSources = incomeSources.filter((s) => s.type === 'fijo' && s.ownerId === uid);
     const defaultQuincenaBase = userFixedSources.reduce(
@@ -124,29 +149,22 @@ export function FixedCashflowWorksheet({
     );
 
     const q1Salary =
-      wsQ1?.fixedSalary ?? (wsMonth ? Math.round(wsMonth.fixedSalary / 2) : defaultQuincenaBase);
+      effectiveQ1?.fixedSalary ??
+      (wsMonth ? Math.round(wsMonth.fixedSalary / 2) : defaultQuincenaBase);
     const q2Salary =
-      wsQ2?.fixedSalary ?? (wsMonth ? Math.round(wsMonth.fixedSalary / 2) : defaultQuincenaBase);
+      effectiveQ2?.fixedSalary ??
+      (wsMonth ? Math.round(wsMonth.fixedSalary / 2) : defaultQuincenaBase);
     const monthlyTotalSalary =
-      wsQ1 || wsQ2
-        ? (wsQ1?.fixedSalary || 0) + (wsQ2?.fixedSalary || 0)
+      effectiveQ1 || effectiveQ2
+        ? q1Salary + q2Salary
         : wsMonth?.fixedSalary || defaultQuincenaBase * 2;
     const quincenalAverage = Math.round(monthlyTotalSalary / 2);
-
-    const q1Debt = (wsQ1?.obligations || []).reduce((s, o) => s + Number(o.amount || 0), 0);
-    const q2Debt = (wsQ2?.obligations || []).reduce((s, o) => s + Number(o.amount || 0), 0);
-    const monthDebt = (wsMonth?.obligations || []).reduce((s, o) => s + Number(o.amount || 0), 0);
-    const monthlyTotalDebt = wsQ1 || wsQ2 || wsMonth ? q1Debt + q2Debt + monthDebt : 0;
 
     return {
       q1Salary,
       q2Salary,
       monthlyTotalSalary,
       quincenalAverage,
-      q1Debt,
-      q2Debt,
-      monthlyTotalDebt,
-      monthlyRemaining: monthlyTotalSalary - monthlyTotalDebt,
     };
   };
 
@@ -160,66 +178,65 @@ export function FixedCashflowWorksheet({
     [worksheets, incomeSources, partnerUid, yearMonthPrefix]
   );
 
-  const householdMonthlyWeighted = useMemo(() => {
-    return {
-      q1Salary: myMonthlyWeighted.q1Salary + partnerMonthlyWeighted.q1Salary,
-      q2Salary: myMonthlyWeighted.q2Salary + partnerMonthlyWeighted.q2Salary,
-      monthlyTotalSalary:
-        myMonthlyWeighted.monthlyTotalSalary + partnerMonthlyWeighted.monthlyTotalSalary,
-      quincenalAverage:
-        myMonthlyWeighted.quincenalAverage + partnerMonthlyWeighted.quincenalAverage,
-      monthlyTotalDebt:
-        myMonthlyWeighted.monthlyTotalDebt + partnerMonthlyWeighted.monthlyTotalDebt,
-      monthlyRemaining:
-        myMonthlyWeighted.monthlyRemaining + partnerMonthlyWeighted.monthlyRemaining,
-    };
-  }, [myMonthlyWeighted, partnerMonthlyWeighted]);
-
-  const activeWeighted =
-    selectedView === 'partner' ? partnerMonthlyWeighted : myMonthlyWeighted;
-
-  // Compute user metrics for the active filter ('all' shows Q1 + Q2 combined; 'q1' shows Q1; 'q2' shows Q2)
-  const computeUserMetrics = (uid: string) => {
-    const { wsQ1, wsQ2, wsMonth } = getUserPeriodDocs(uid);
+  const computeUserMetrics = (uid: string, ownerLabel: string) => {
+    const { effectiveQ1, effectiveQ2, wsQ1, wsQ2, wsMonth } = getUserPeriodDocs(uid);
     const weighted = uid === partnerUid ? partnerMonthlyWeighted : myMonthlyWeighted;
+
+    // Merge permanent template obligations with per-month paid checkmarks if present
+    const resolvedQ1Obligations = (effectiveQ1?.obligations || []).map((o) => {
+      const monthMatch = (wsQ1?.obligations || []).find(
+        (m) => m.id === o.id || m.concept === o.concept
+      );
+      return {
+        ...o,
+        paid: monthMatch ? Boolean(monthMatch.paid) : Boolean(o.paid),
+        sourcePeriodKey: 'BASE-Q1',
+        quincenaTag: '1ª Qna (15)',
+        ownerUid: uid,
+        ownerLabel,
+      };
+    });
+
+    const resolvedQ2Obligations = (effectiveQ2?.obligations || []).map((o) => {
+      const monthMatch = (wsQ2?.obligations || []).find(
+        (m) => m.id === o.id || m.concept === o.concept
+      );
+      return {
+        ...o,
+        paid: monthMatch ? Boolean(monthMatch.paid) : Boolean(o.paid),
+        sourcePeriodKey: 'BASE-Q2',
+        quincenaTag: '2ª Qna (30)',
+        ownerUid: uid,
+        ownerLabel,
+      };
+    });
 
     let fixedSalary = 0;
     let obligations: Array<
-      WorksheetObligationItem & { sourcePeriodKey: string; quincenaTag: string }
+      WorksheetObligationItem & {
+        sourcePeriodKey: string;
+        quincenaTag: string;
+        ownerUid: string;
+        ownerLabel: string;
+      }
     > = [];
 
     if (quincenaFilter === 'q1') {
-      fixedSalary = wsQ1?.fixedSalary ?? weighted.q1Salary;
-      obligations = (wsQ1?.obligations || []).map((o) => ({
-        ...o,
-        sourcePeriodKey: `${yearMonthPrefix}-Q1`,
-        quincenaTag: '1ª Qna (15)',
-      }));
+      fixedSalary = weighted.q1Salary;
+      obligations = resolvedQ1Obligations;
     } else if (quincenaFilter === 'q2') {
-      fixedSalary = wsQ2?.fixedSalary ?? weighted.q2Salary;
-      obligations = (wsQ2?.obligations || []).map((o) => ({
-        ...o,
-        sourcePeriodKey: `${yearMonthPrefix}-Q2`,
-        quincenaTag: '2ª Qna (30)',
-      }));
+      fixedSalary = weighted.q2Salary;
+      obligations = resolvedQ2Obligations;
     } else {
       fixedSalary = weighted.monthlyTotalSalary;
-      const listQ1 = (wsQ1?.obligations || []).map((o) => ({
-        ...o,
-        sourcePeriodKey: `${yearMonthPrefix}-Q1`,
-        quincenaTag: '1ª Qna (15)',
-      }));
-      const listQ2 = (wsQ2?.obligations || []).map((o) => ({
-        ...o,
-        sourcePeriodKey: `${yearMonthPrefix}-Q2`,
-        quincenaTag: '2ª Qna (30)',
-      }));
       const listMonth = (wsMonth?.obligations || []).map((o) => ({
         ...o,
         sourcePeriodKey: yearMonthPrefix,
         quincenaTag: 'Mensual',
+        ownerUid: uid,
+        ownerLabel,
       }));
-      obligations = [...listQ1, ...listQ2, ...listMonth];
+      obligations = [...resolvedQ1Obligations, ...resolvedQ2Obligations, ...listMonth];
     }
 
     const totalFixedObligations = obligations.reduce(
@@ -240,8 +257,7 @@ export function FixedCashflowWorksheet({
       .filter((t) => t.type === 'expense' && !t.recurringPaymentId)
       .reduce((sum, t) => sum + Number(t.amount || 0), 0);
 
-    const totalAvailableForExtras = fixedRemaining + variableIncome;
-    const finalNetAvailable = totalAvailableForExtras - extraExpenses;
+    const finalNetAvailable = fixedRemaining + variableIncome - extraExpenses;
 
     return {
       fixedSalary,
@@ -250,18 +266,21 @@ export function FixedCashflowWorksheet({
       fixedRemaining,
       variableIncome,
       extraExpenses,
-      totalAvailableForExtras,
       finalNetAvailable,
+      q1Salary: weighted.q1Salary,
+      q2Salary: weighted.q2Salary,
+      quincenalAverage: weighted.quincenalAverage,
+      monthlyTotalSalary: weighted.monthlyTotalSalary,
     };
   };
 
   const myMetrics = useMemo(
-    () => computeUserMetrics(user?.uid || ''),
-    [worksheets, periodTransactions, user?.uid, quincenaFilter, yearMonthPrefix, myMonthlyWeighted]
+    () => computeUserMetrics(user?.uid || '', myName),
+    [worksheets, periodTransactions, user?.uid, quincenaFilter, yearMonthPrefix, myMonthlyWeighted, myName]
   );
 
   const partnerMetrics = useMemo(
-    () => computeUserMetrics(partnerUid || 'partner'),
+    () => computeUserMetrics(partnerUid || 'partner', partnerName),
     [
       worksheets,
       periodTransactions,
@@ -269,29 +288,44 @@ export function FixedCashflowWorksheet({
       quincenaFilter,
       yearMonthPrefix,
       partnerMonthlyWeighted,
+      partnerName,
     ]
   );
 
-  const consolidatedMetrics = useMemo(() => {
-    const fixedSalary = myMetrics.fixedSalary + partnerMetrics.fixedSalary;
+  const activeMetrics = useMemo(() => {
+    if (!isConsolidatedView) {
+      return globalScope === 'pareja' ? partnerMetrics : myMetrics;
+    }
+    const fixedSalary = myMetrics.fixedSalary + (partner ? partnerMetrics.fixedSalary : 0);
+    const obligations = [
+      ...myMetrics.obligations,
+      ...(partner ? partnerMetrics.obligations : []),
+    ];
     const totalFixedObligations =
-      myMetrics.totalFixedObligations + partnerMetrics.totalFixedObligations;
+      myMetrics.totalFixedObligations + (partner ? partnerMetrics.totalFixedObligations : 0);
     const fixedRemaining = fixedSalary - totalFixedObligations;
-    const variableIncome = myMetrics.variableIncome + partnerMetrics.variableIncome;
-    const extraExpenses = myMetrics.extraExpenses + partnerMetrics.extraExpenses;
-    const totalAvailableForExtras = fixedRemaining + variableIncome;
-    const finalNetAvailable = totalAvailableForExtras - extraExpenses;
+    const variableIncome =
+      myMetrics.variableIncome + (partner ? partnerMetrics.variableIncome : 0);
+    const extraExpenses =
+      myMetrics.extraExpenses + (partner ? partnerMetrics.extraExpenses : 0);
+    const finalNetAvailable = fixedRemaining + variableIncome - extraExpenses;
 
     return {
       fixedSalary,
+      obligations,
       totalFixedObligations,
       fixedRemaining,
       variableIncome,
       extraExpenses,
-      totalAvailableForExtras,
       finalNetAvailable,
+      q1Salary: myMetrics.q1Salary + (partner ? partnerMetrics.q1Salary : 0),
+      q2Salary: myMetrics.q2Salary + (partner ? partnerMetrics.q2Salary : 0),
+      quincenalAverage:
+        myMetrics.quincenalAverage + (partner ? partnerMetrics.quincenalAverage : 0),
+      monthlyTotalSalary:
+        myMetrics.monthlyTotalSalary + (partner ? partnerMetrics.monthlyTotalSalary : 0),
     };
-  }, [myMetrics, partnerMetrics]);
+  }, [isConsolidatedView, globalScope, myMetrics, partnerMetrics, partner]);
 
   const saveWorksheetDoc = async (
     targetUid: string,
@@ -332,11 +366,9 @@ export function FixedCashflowWorksheet({
     setIsDiscountRow(false);
 
     if (mode === 'income') {
-      const { wsQ1, wsQ2 } = getUserPeriodDocs(activeTargetUid);
+      const targetW = activeTargetUid === partnerUid ? partnerMonthlyWeighted : myMonthlyWeighted;
       const existingVal =
-        quincenaFilter === 'q2'
-          ? wsQ2?.fixedSalary || activeWeighted.q2Salary
-          : wsQ1?.fixedSalary || activeWeighted.q1Salary;
+        quincenaFilter === 'q2' ? targetW.q2Salary : targetW.q1Salary;
       if (existingVal > 0) {
         setNewAmount(formatInputCOP(String(existingVal)));
       }
@@ -353,27 +385,27 @@ export function FixedCashflowWorksheet({
 
     setIsSavingModal(true);
     try {
-      const { wsQ1, wsQ2 } = getUserPeriodDocs(activeTargetUid);
-      const q1Key = `${yearMonthPrefix}-Q1`;
-      const q2Key = `${yearMonthPrefix}-Q2`;
+      const { effectiveQ1, effectiveQ2 } = getUserPeriodDocs(activeTargetUid);
+      const targetW = activeTargetUid === partnerUid ? partnerMonthlyWeighted : myMonthlyWeighted;
 
+      // Save permanently into BASE-Q1 / BASE-Q2 so fixed salary & obligations apply to ALL months unless edited
       if (modalMode === 'income') {
         if (targetQuincena === 'q1' || targetQuincena === 'both') {
           await saveWorksheetDoc(
             activeTargetUid,
             activeTargetName,
-            q1Key,
+            'BASE-Q1',
             rawAmt,
-            wsQ1?.obligations || []
+            effectiveQ1?.obligations || []
           );
         }
         if (targetQuincena === 'q2' || targetQuincena === 'both') {
           await saveWorksheetDoc(
             activeTargetUid,
             activeTargetName,
-            q2Key,
+            'BASE-Q2',
             rawAmt,
-            wsQ2?.obligations || []
+            effectiveQ2?.obligations || []
           );
         }
       } else {
@@ -381,9 +413,9 @@ export function FixedCashflowWorksheet({
         const signedAmount = isDiscountRow ? -rawAmt : rawAmt;
 
         if (targetQuincena === 'q1' || targetQuincena === 'both') {
-          const currentQ1Obs = wsQ1?.obligations || [];
-          const baseSalaryQ1 = wsQ1?.fixedSalary ?? activeWeighted.q1Salary;
-          await saveWorksheetDoc(activeTargetUid, activeTargetName, q1Key, baseSalaryQ1, [
+          const currentQ1Obs = effectiveQ1?.obligations || [];
+          const baseSalaryQ1 = effectiveQ1?.fixedSalary ?? targetW.q1Salary;
+          await saveWorksheetDoc(activeTargetUid, activeTargetName, 'BASE-Q1', baseSalaryQ1, [
             ...currentQ1Obs,
             {
               id: `ob_${Date.now()}_q1`,
@@ -395,9 +427,9 @@ export function FixedCashflowWorksheet({
         }
 
         if (targetQuincena === 'q2' || targetQuincena === 'both') {
-          const currentQ2Obs = wsQ2?.obligations || [];
-          const baseSalaryQ2 = wsQ2?.fixedSalary ?? activeWeighted.q2Salary;
-          await saveWorksheetDoc(activeTargetUid, activeTargetName, q2Key, baseSalaryQ2, [
+          const currentQ2Obs = effectiveQ2?.obligations || [];
+          const baseSalaryQ2 = effectiveQ2?.fixedSalary ?? targetW.q2Salary;
+          await saveWorksheetDoc(activeTargetUid, activeTargetName, 'BASE-Q2', baseSalaryQ2, [
             ...currentQ2Obs,
             {
               id: `ob_${Date.now()}_q2`,
@@ -418,1172 +450,372 @@ export function FixedCashflowWorksheet({
     }
   };
 
-  const handleTogglePaid = async (itemId: string, sourcePeriodKey: string) => {
-    if (!activeTargetUid) return;
-    const targetWs = worksheets.find(
-      (w) => w.userId === activeTargetUid && w.periodKey === sourcePeriodKey
-    );
-    if (!targetWs) return;
-    const updated = targetWs.obligations.map((ob) =>
+  const handleTogglePaid = async (itemId: string, sourcePeriodKey: string, ownerUid: string) => {
+    const { effectiveQ1, effectiveQ2 } = getUserPeriodDocs(ownerUid);
+    const targetDoc =
+      sourcePeriodKey === 'BASE-Q1'
+        ? effectiveQ1
+        : sourcePeriodKey === 'BASE-Q2'
+        ? effectiveQ2
+        : worksheets.find((w) => w.userId === ownerUid && w.periodKey === sourcePeriodKey);
+
+    if (!targetDoc) return;
+    const updated = targetDoc.obligations.map((ob) =>
       ob.id === itemId ? { ...ob, paid: !ob.paid } : ob
     );
     await saveWorksheetDoc(
-      activeTargetUid,
-      activeTargetName,
+      ownerUid,
+      targetDoc.userName || (ownerUid === partnerUid ? partnerName : myName),
       sourcePeriodKey,
-      targetWs.fixedSalary,
+      targetDoc.fixedSalary,
       updated
     );
   };
 
-  const handleDeleteObligation = async (itemId: string, sourcePeriodKey: string) => {
-    if (!activeTargetUid) return;
-    const targetWs = worksheets.find(
-      (w) => w.userId === activeTargetUid && w.periodKey === sourcePeriodKey
-    );
-    if (!targetWs) return;
-    const updated = targetWs.obligations.filter((ob) => ob.id !== itemId);
+  const handleDeleteObligation = async (
+    itemId: string,
+    sourcePeriodKey: string,
+    ownerUid: string
+  ) => {
+    const { effectiveQ1, effectiveQ2 } = getUserPeriodDocs(ownerUid);
+    const targetDoc =
+      sourcePeriodKey === 'BASE-Q1'
+        ? effectiveQ1
+        : sourcePeriodKey === 'BASE-Q2'
+        ? effectiveQ2
+        : worksheets.find((w) => w.userId === ownerUid && w.periodKey === sourcePeriodKey);
+
+    if (!targetDoc) return;
+    const updated = targetDoc.obligations.filter((ob) => ob.id !== itemId);
     await saveWorksheetDoc(
-      activeTargetUid,
-      activeTargetName,
+      ownerUid,
+      targetDoc.userName || (ownerUid === partnerUid ? partnerName : myName),
       sourcePeriodKey,
-      targetWs.fixedSalary,
+      targetDoc.fixedSalary,
       updated
     );
   };
-
-  const handleAutoLoadFixedTemplate = async () => {
-    if (!activeTargetUid) return;
-    const { wsQ1, wsQ2 } = getUserPeriodDocs(activeTargetUid);
-    const q1Key = `${yearMonthPrefix}-Q1`;
-    const q2Key = `${yearMonthPrefix}-Q2`;
-
-    const userFixedSources = incomeSources.filter(
-      (s) => s.type === 'fijo' && s.ownerId === activeTargetUid
-    );
-    const fallbackRecInc = recurringPayments
-      .filter((p) => p.flowType === 'income' && p.ownerId === activeTargetUid)
-      .reduce((s, x) => s + Number(x.amount || 0), 0);
-
-    const detectedQuincenaSalary =
-      userFixedSources.length > 0
-        ? userFixedSources.reduce((s, x) => s + Number(x.defaultAmount || 0), 0)
-        : fallbackRecInc;
-
-    const existingQ1 = new Set((wsQ1?.obligations || []).map((o) => o.concept.toLowerCase()));
-    const existingQ2 = new Set((wsQ2?.obligations || []).map((o) => o.concept.toLowerCase()));
-    const importedQ1: WorksheetObligationItem[] = [...(wsQ1?.obligations || [])];
-    const importedQ2: WorksheetObligationItem[] = [...(wsQ2?.obligations || [])];
-
-    for (const rp of recurringPayments) {
-      if (rp.flowType === 'income') continue;
-      if (rp.ownerId !== activeTargetUid) continue;
-      const days: number[] = rp.days || [];
-
-      if (days.some((d) => d <= 15) && !existingQ1.has(rp.title.toLowerCase())) {
-        importedQ1.push({
-          id: `ob_rp_${rp.id}_q1`,
-          concept: rp.title,
-          amount: Number(rp.amount || 0),
-          paid: false,
-        });
-      }
-      if (days.some((d) => d > 15) && !existingQ2.has(rp.title.toLowerCase())) {
-        importedQ2.push({
-          id: `ob_rp_${rp.id}_q2`,
-          concept: rp.title,
-          amount: Number(rp.amount || 0),
-          paid: false,
-        });
-      }
-    }
-
-    await saveWorksheetDoc(
-      activeTargetUid,
-      activeTargetName,
-      q1Key,
-      wsQ1?.fixedSalary || detectedQuincenaSalary,
-      importedQ1
-    );
-    await saveWorksheetDoc(
-      activeTargetUid,
-      activeTargetName,
-      q2Key,
-      wsQ2?.fixedSalary || detectedQuincenaSalary,
-      importedQ2
-    );
-  };
-
-  const currentUserMetrics = selectedView === 'partner' ? partnerMetrics : myMetrics;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-      {/* Selector Limpio de Miembro / Consolidado */}
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: partner ? '1fr 1fr 1.2fr' : '1fr 1fr',
-          backgroundColor: 'var(--color-surface-container)',
-          padding: '4px',
-          borderRadius: '12px',
-          gap: '4px',
-        }}
-      >
-        <button
-          type="button"
-          onClick={() => setSelectedView('me')}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: '6px',
-            padding: '10px 8px',
-            borderRadius: '8px',
-            fontSize: '13px',
-            fontWeight: selectedView === 'me' ? 600 : 500,
-            backgroundColor:
-              selectedView === 'me' ? 'var(--color-surface-container-lowest)' : 'transparent',
-            color:
-              selectedView === 'me' ? 'var(--color-primary)' : 'var(--color-on-surface-variant)',
-            boxShadow: selectedView === 'me' ? 'var(--shadow-level-1)' : 'none',
-          }}
-        >
-          <User size={15} />
-          <span>{myName}</span>
-        </button>
-
-        {partner && (
-          <button
-            type="button"
-            onClick={() => setSelectedView('partner')}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: '6px',
-              padding: '10px 8px',
-              borderRadius: '8px',
-              fontSize: '13px',
-              fontWeight: selectedView === 'partner' ? 600 : 500,
-              backgroundColor:
-                selectedView === 'partner'
-                  ? 'var(--color-surface-container-lowest)'
-                  : 'transparent',
-              color:
-                selectedView === 'partner'
-                  ? 'var(--color-primary)'
-                  : 'var(--color-on-surface-variant)',
-              boxShadow: selectedView === 'partner' ? 'var(--shadow-level-1)' : 'none',
-            }}
-          >
-            <User size={15} />
-            <span>{partnerName}</span>
-          </button>
-        )}
-
-        <button
-          type="button"
-          onClick={() => setSelectedView('consolidated')}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: '6px',
-            padding: '10px 8px',
-            borderRadius: '8px',
-            fontSize: '13px',
-            fontWeight: selectedView === 'consolidated' ? 600 : 500,
-            backgroundColor:
-              selectedView === 'consolidated'
-                ? 'var(--color-surface-container-lowest)'
-                : 'transparent',
-            color:
-              selectedView === 'consolidated'
-                ? 'var(--color-primary)'
-                : 'var(--color-on-surface-variant)',
-            boxShadow: selectedView === 'consolidated' ? 'var(--shadow-level-1)' : 'none',
-          }}
-        >
-          <Users size={15} />
-          <span>Consolidado Hogar</span>
-        </button>
-      </div>
-
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
       {/* ================================================================= */}
-      {/* PONDERADO MENSUAL Y QUINCENAL DE INGRESOS FIJOS                   */}
+      {/* CARD 1: RESUMEN EJECUTIVO DE PRESUPUESTO FIJO Y DISPONIBLE        */}
       {/* ================================================================= */}
-      <Card style={{ padding: '16px' }}>
+      <Card style={{ padding: '12px 14px' }}>
         <div
           style={{
             display: 'flex',
             justifyContent: 'space-between',
             alignItems: 'center',
-            marginBottom: '12px',
+            gap: '8px',
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Calendar size={18} color="var(--color-primary)" />
-            <div>
-              <h3 style={{ fontSize: '14px', fontWeight: 600, margin: 0 }}>
-                Ingresos Fijos Quincenales y Ponderado Mensual
-              </h3>
-              <p
-                style={{
-                  fontSize: '11px',
-                  color: 'var(--color-on-surface-variant)',
-                  margin: 0,
-                }}
-              >
-                Toca una quincena para filtrar o &quot;Total Mensual&quot; para ver todos
-              </p>
+          <div>
+            <span className="text-label-sm" style={{ color: 'var(--color-on-surface-variant)' }}>
+              PRESUPUESTO FIJO PERMANENTE ({globalScope.toUpperCase()})
+            </span>
+            <div style={{ fontSize: '11px', color: 'var(--color-on-surface-variant)', marginTop: '2px' }}>
+              Q1: {formatCOP(activeMetrics.q1Salary)} · Q2: {formatCOP(activeMetrics.q2Salary)} · Promedio Qna:{' '}
+              <strong>{formatCOP(activeMetrics.quincenalAverage)}</strong>
             </div>
           </div>
 
-          {selectedView !== 'consolidated' && (
-            <button
-              type="button"
-              onClick={() => openAddPopup('income')}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '4px',
-                padding: '6px 10px',
-                borderRadius: '8px',
-                fontSize: '12px',
-                fontWeight: 600,
-                backgroundColor: 'var(--color-primary-container)',
-                color: 'var(--color-primary-dark)',
-              }}
-            >
-              <Pencil size={12} /> Sueldo Fijo
-            </button>
-          )}
-        </div>
-
-        {selectedView !== 'consolidated' ? (
-          <div
+          <button
+            type="button"
+            onClick={() => openAddPopup('income')}
             style={{
-              display: 'grid',
-              gridTemplateColumns: '1fr 1fr',
-              gap: '10px',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '5px',
+              padding: '6px 12px',
+              borderRadius: '9999px',
+              fontSize: '12px',
+              fontWeight: 600,
+              backgroundColor: 'var(--color-primary-container)',
+              color: 'var(--color-primary-dark)',
+              flexShrink: 0,
             }}
           >
-            <div
-              onClick={() => onChangeQuincenaFilter?.('q1')}
-              style={{
-                padding: '10px 12px',
-                borderRadius: '10px',
-                backgroundColor:
-                  quincenaFilter === 'q1'
-                    ? 'var(--color-primary-container)'
-                    : 'var(--color-surface-container-low)',
-                border:
-                  quincenaFilter === 'q1'
-                    ? '1.5px solid var(--color-primary)'
-                    : '1px solid transparent',
-                cursor: 'pointer',
-              }}
-            >
-              <div style={{ fontSize: '11px', color: 'var(--color-on-surface-variant)' }}>
-                1ª Quincena (Día 15)
-              </div>
-              <div
-                style={{
-                  fontSize: '15px',
-                  fontWeight: 700,
-                  marginTop: '2px',
-                  fontVariantNumeric: 'tabular-nums',
-                }}
-              >
-                {formatCOP(activeWeighted.q1Salary)}
-              </div>
-            </div>
+            <Pencil size={12} /> Sueldo Fijo
+          </button>
+        </div>
 
-            <div
-              onClick={() => onChangeQuincenaFilter?.('q2')}
-              style={{
-                padding: '10px 12px',
-                borderRadius: '10px',
-                backgroundColor:
-                  quincenaFilter === 'q2'
-                    ? 'var(--color-primary-container)'
-                    : 'var(--color-surface-container-low)',
-                border:
-                  quincenaFilter === 'q2'
-                    ? '1.5px solid var(--color-primary)'
-                    : '1px solid transparent',
-                cursor: 'pointer',
-              }}
-            >
-              <div style={{ fontSize: '11px', color: 'var(--color-on-surface-variant)' }}>
-                2ª Quincena (Día 30)
-              </div>
-              <div
-                style={{
-                  fontSize: '15px',
-                  fontWeight: 700,
-                  marginTop: '2px',
-                  fontVariantNumeric: 'tabular-nums',
-                }}
-              >
-                {formatCOP(activeWeighted.q2Salary)}
-              </div>
+        {/* 3 KPIs Principales: Sueldo Fijo | Gastos Fijos | Disponible Libre */}
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(3, 1fr)',
+            gap: '8px',
+            marginTop: '8px',
+            padding: '10px 12px',
+            borderRadius: '12px',
+            backgroundColor: 'var(--color-surface-container-low)',
+          }}
+        >
+          <div
+            onClick={() => openAddPopup('income')}
+            style={{ cursor: 'pointer' }}
+            title="Editar sueldo fijo permanente"
+          >
+            <div style={{ fontSize: '11px', color: 'var(--color-on-surface-variant)' }}>
+              Sueldo Fijo
             </div>
-
             <div
               style={{
-                padding: '10px 12px',
-                borderRadius: '10px',
-                backgroundColor: 'var(--color-surface-container-low)',
+                fontSize: '14px',
+                fontWeight: 700,
+                marginTop: '2px',
+                fontVariantNumeric: 'tabular-nums',
               }}
             >
-              <div style={{ fontSize: '11px', color: 'var(--color-on-surface-variant)' }}>
-                Ponderado Quincenal
-              </div>
-              <div
-                style={{
-                  fontSize: '15px',
-                  fontWeight: 700,
-                  marginTop: '2px',
-                  color: 'var(--color-primary)',
-                  fontVariantNumeric: 'tabular-nums',
-                }}
-              >
-                {formatCOP(activeWeighted.quincenalAverage)}
-              </div>
-            </div>
-
-            <div
-              onClick={() => onChangeQuincenaFilter?.('all')}
-              style={{
-                padding: '10px 12px',
-                borderRadius: '10px',
-                backgroundColor:
-                  quincenaFilter === 'all'
-                    ? 'var(--color-primary-container)'
-                    : 'var(--color-surface-container-low)',
-                border:
-                  quincenaFilter === 'all'
-                    ? '1.5px solid var(--color-primary)'
-                    : '1px solid transparent',
-                cursor: 'pointer',
-              }}
-            >
-              <div style={{ fontSize: '11px', color: 'var(--color-primary-dark)', fontWeight: 600 }}>
-                Total Mensual (Todos)
-              </div>
-              <div
-                style={{
-                  fontSize: '15px',
-                  fontWeight: 700,
-                  marginTop: '2px',
-                  color: 'var(--color-primary-dark)',
-                  fontVariantNumeric: 'tabular-nums',
-                }}
-              >
-                {formatCOP(activeWeighted.monthlyTotalSalary)}
-              </div>
+              {formatCOP(activeMetrics.fixedSalary)}
             </div>
           </div>
-        ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-            <div
-              style={{
-                padding: '10px 12px',
-                borderRadius: '10px',
-                backgroundColor: 'var(--color-surface-container-low)',
-              }}
-            >
-              <div style={{ fontSize: '11px', color: 'var(--color-on-surface-variant)' }}>
-                {myName} (Mensual)
-              </div>
-              <div style={{ fontSize: '15px', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
-                {formatCOP(myMonthlyWeighted.monthlyTotalSalary)}
-              </div>
-              <div style={{ fontSize: '11px', color: 'var(--color-on-surface-variant)', marginTop: '2px' }}>
-                Q1: {formatCOP(myMonthlyWeighted.q1Salary)} · Q2: {formatCOP(myMonthlyWeighted.q2Salary)}
-              </div>
+
+          <div
+            style={{
+              borderLeft: '1px solid var(--color-outline-variant)',
+              paddingLeft: '10px',
+            }}
+          >
+            <div style={{ fontSize: '11px', color: 'var(--color-on-surface-variant)' }}>
+              Gastos Fijos
             </div>
-
-            {partner && (
-              <div
-                style={{
-                  padding: '10px 12px',
-                  borderRadius: '10px',
-                  backgroundColor: 'var(--color-surface-container-low)',
-                }}
-              >
-                <div style={{ fontSize: '11px', color: 'var(--color-on-surface-variant)' }}>
-                  {partnerName} (Mensual)
-                </div>
-                <div
-                  style={{ fontSize: '15px', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}
-                >
-                  {formatCOP(partnerMonthlyWeighted.monthlyTotalSalary)}
-                </div>
-                <div
-                  style={{
-                    fontSize: '11px',
-                    color: 'var(--color-on-surface-variant)',
-                    marginTop: '2px',
-                  }}
-                >
-                  Q1: {formatCOP(partnerMonthlyWeighted.q1Salary)} · Q2:{' '}
-                  {formatCOP(partnerMonthlyWeighted.q2Salary)}
-                </div>
-              </div>
-            )}
-
             <div
               style={{
-                padding: '10px 12px',
-                borderRadius: '10px',
-                backgroundColor: 'var(--color-surface-container-low)',
+                fontSize: '14px',
+                fontWeight: 700,
+                color: 'var(--color-error)',
+                marginTop: '2px',
+                fontVariantNumeric: 'tabular-nums',
               }}
             >
-              <div style={{ fontSize: '11px', color: 'var(--color-on-surface-variant)' }}>
-                Ponderado Quincenal Hogar
-              </div>
-              <div
-                style={{
-                  fontSize: '15px',
-                  fontWeight: 700,
-                  color: 'var(--color-primary)',
-                  fontVariantNumeric: 'tabular-nums',
-                }}
-              >
-                {formatCOP(householdMonthlyWeighted.quincenalAverage)}
-              </div>
-            </div>
-
-            <div
-              style={{
-                padding: '10px 12px',
-                borderRadius: '10px',
-                backgroundColor: 'var(--color-primary-container)',
-              }}
-            >
-              <div style={{ fontSize: '11px', color: 'var(--color-primary-dark)', fontWeight: 600 }}>
-                Total Mensual Hogar
-              </div>
-              <div
-                style={{
-                  fontSize: '15px',
-                  fontWeight: 700,
-                  color: 'var(--color-primary-dark)',
-                  fontVariantNumeric: 'tabular-nums',
-                }}
-              >
-                {formatCOP(householdMonthlyWeighted.monthlyTotalSalary)}
-              </div>
+              {formatCOP(activeMetrics.totalFixedObligations)}
             </div>
           </div>
-        )}
+
+          <div
+            style={{
+              borderLeft: '1px solid var(--color-outline-variant)',
+              paddingLeft: '10px',
+            }}
+          >
+            <div style={{ fontSize: '11px', color: 'var(--color-on-surface-variant)' }}>
+              Restante Fijo
+            </div>
+            <div
+              style={{
+                fontSize: '14px',
+                fontWeight: 700,
+                color:
+                  activeMetrics.fixedRemaining >= 0
+                    ? 'var(--color-success)'
+                    : 'var(--color-error)',
+                marginTop: '2px',
+                fontVariantNumeric: 'tabular-nums',
+              }}
+            >
+              {formatCOP(activeMetrics.fixedRemaining)}
+            </div>
+          </div>
+        </div>
+
+        {/* Barra compacta de Variables y Esporádicos */}
+        <div
+          style={{
+            marginTop: '8px',
+            padding: '8px 12px',
+            borderRadius: '10px',
+            backgroundColor:
+              activeMetrics.finalNetAvailable >= 0
+                ? 'rgba(16, 185, 129, 0.08)'
+                : 'rgba(239, 68, 68, 0.08)',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            flexWrap: 'wrap',
+            gap: '8px',
+            fontSize: '12px',
+          }}
+        >
+          <div style={{ color: 'var(--color-on-surface-variant)', fontVariantNumeric: 'tabular-nums' }}>
+            Variables:{' '}
+            <strong style={{ color: 'var(--color-success)' }}>
+              +{formatCOP(activeMetrics.variableIncome)}
+            </strong>{' '}
+            • Extras:{' '}
+            <strong style={{ color: 'var(--color-error)' }}>
+              -{formatCOP(activeMetrics.extraExpenses)}
+            </strong>
+          </div>
+          <div style={{ fontVariantNumeric: 'tabular-nums' }}>
+            <span style={{ color: 'var(--color-on-surface-variant)', marginRight: '6px' }}>
+              Libre Real:
+            </span>
+            <strong
+              style={{
+                fontSize: '14px',
+                color:
+                  activeMetrics.finalNetAvailable >= 0
+                    ? 'var(--color-success)'
+                    : 'var(--color-error)',
+              }}
+            >
+              {formatCOP(activeMetrics.finalNetAvailable)}
+            </strong>
+          </div>
+        </div>
       </Card>
 
       {/* ================================================================= */}
-      {/* VISTA INDIVIDUAL LIMPIA (SUELDO FIJO - GASTOS FIJOS = RESTANTE)   */}
+      {/* CARD 2: LISTA LIMPIA DE OBLIGACIONES FIJAS                        */}
       {/* ================================================================= */}
-      {selectedView !== 'consolidated' ? (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          <Card style={{ padding: '16px' }}>
-            {/* Cabecera Limpia con Botón de Popup */}
-            <div
+      <Card style={{ padding: '12px 14px' }}>
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            marginBottom: '8px',
+          }}
+        >
+          <h3 style={{ fontSize: '14px', fontWeight: 600, margin: 0 }}>
+            Obligaciones Fijas ({activeMetrics.obligations.length})
+          </h3>
+
+          <Button variant="primary" size="sm" onClick={() => openAddPopup('expense')}>
+            <Plus size={14} style={{ marginRight: '2px' }} /> Gasto Fijo
+          </Button>
+        </div>
+
+        {activeMetrics.obligations.length === 0 ? (
+          <div
+            style={{
+              padding: '16px 12px',
+              textAlign: 'center',
+              borderRadius: '10px',
+              backgroundColor: 'var(--color-surface-container-low)',
+            }}
+          >
+            <p
               style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                gap: '8px',
-                marginBottom: '14px',
+                fontSize: '12px',
+                color: 'var(--color-on-surface-variant)',
+                margin: 0,
               }}
             >
-              <div>
-                <h3 style={{ fontSize: '16px', fontWeight: 600, margin: 0 }}>
-                  Gastos Fijos · {activeTargetName}
-                </h3>
-                <span style={{ fontSize: '12px', color: 'var(--color-on-surface-variant)' }}>
-                  {periodLabel}
-                </span>
-              </div>
-
-              <div style={{ display: 'flex', gap: '6px' }}>
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={handleAutoLoadFixedTemplate}
-                  title="Importar fijos programados"
-                >
-                  <Sparkles size={14} style={{ marginRight: '4px' }} /> Plantillas
-                </Button>
-                <Button
-                  variant="primary"
-                  size="sm"
-                  onClick={() => openAddPopup('expense')}
-                >
-                  <Plus size={15} style={{ marginRight: '4px' }} /> + Gasto Fijo
-                </Button>
-              </div>
-            </div>
-
-            {/* 3 KPIs Alineados (Sueldo Fijo | Gastos Fijos | Restante Fijo) */}
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(3, 1fr)',
-                gap: '8px',
-                padding: '12px',
-                borderRadius: '12px',
-                backgroundColor: 'var(--color-surface-container-low)',
-                marginBottom: '16px',
-              }}
-            >
-              <div
-                onClick={() => openAddPopup('income')}
-                style={{ cursor: 'pointer' }}
-                title="Toca para editar tu sueldo fijo"
-              >
-                <div style={{ fontSize: '11px', color: 'var(--color-on-surface-variant)' }}>
-                  Sueldo Fijo
-                </div>
+              No hay gastos fijos configurados. Usa el botón &quot;+ Gasto Fijo&quot; para dejarlos fijos todos los meses.
+            </p>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
+            {activeMetrics.obligations.map((ob, index) => {
+              const isNegative = ob.amount < 0;
+              const isLast = index === activeMetrics.obligations.length - 1;
+              return (
                 <div
+                  key={`${ob.ownerUid}_${ob.sourcePeriodKey}_${ob.id}`}
                   style={{
-                    fontSize: '14px',
-                    fontWeight: 700,
-                    color: 'var(--color-on-surface)',
-                    marginTop: '2px',
-                    fontVariantNumeric: 'tabular-nums',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '10px',
+                    padding: '8px 2px',
+                    borderBottom: isLast ? 'none' : '1px solid var(--color-surface-container)',
                   }}
                 >
-                  {formatCOP(currentUserMetrics.fixedSalary)}
-                </div>
-              </div>
+                  <div
+                    onClick={() => handleTogglePaid(ob.id, ob.sourcePeriodKey, ob.ownerUid)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '10px',
+                      flex: 1,
+                      minWidth: 0,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {ob.paid ? (
+                      <CheckCircle2
+                        size={18}
+                        color="var(--color-success)"
+                        style={{ flexShrink: 0 }}
+                      />
+                    ) : (
+                      <Circle size={18} color="var(--color-outline)" style={{ flexShrink: 0 }} />
+                    )}
 
-              <div
-                style={{
-                  borderLeft: '1px solid var(--color-outline-variant)',
-                  paddingLeft: '10px',
-                }}
-              >
-                <div style={{ fontSize: '11px', color: 'var(--color-on-surface-variant)' }}>
-                  Total Fijos
-                </div>
-                <div
-                  style={{
-                    fontSize: '14px',
-                    fontWeight: 700,
-                    color: 'var(--color-error)',
-                    marginTop: '2px',
-                    fontVariantNumeric: 'tabular-nums',
-                  }}
-                >
-                  {formatCOP(currentUserMetrics.totalFixedObligations)}
-                </div>
-              </div>
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div
+                        style={{
+                          fontSize: '14px',
+                          fontWeight: 500,
+                          color: 'var(--color-on-surface)',
+                          textDecoration: ob.paid ? 'line-through' : 'none',
+                          opacity: ob.paid ? 0.6 : 1,
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                        }}
+                      >
+                        {ob.concept}
+                      </div>
+                      <div
+                        style={{
+                          fontSize: '11px',
+                          color: 'var(--color-on-surface-variant)',
+                          marginTop: '1px',
+                        }}
+                      >
+                        {ob.quincenaTag}
+                        {isConsolidatedView ? ` • ${ob.ownerLabel}` : ''}
+                        {isNegative ? ' • Ahorro a favor' : ''}
+                      </div>
+                    </div>
+                  </div>
 
-              <div
-                style={{
-                  borderLeft: '1px solid var(--color-outline-variant)',
-                  paddingLeft: '10px',
-                }}
-              >
-                <div style={{ fontSize: '11px', color: 'var(--color-on-surface-variant)' }}>
-                  Restante
-                </div>
-                <div
-                  style={{
-                    fontSize: '14px',
-                    fontWeight: 700,
-                    color:
-                      currentUserMetrics.fixedRemaining >= 0
-                        ? 'var(--color-success)'
-                        : 'var(--color-error)',
-                    marginTop: '2px',
-                    fontVariantNumeric: 'tabular-nums',
-                  }}
-                >
-                  {formatCOP(currentUserMetrics.fixedRemaining)}
-                </div>
-              </div>
-            </div>
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      flexShrink: 0,
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontSize: '14px',
+                        fontWeight: 600,
+                        fontVariantNumeric: 'tabular-nums',
+                        color: isNegative ? 'var(--color-success)' : 'var(--color-on-surface)',
+                      }}
+                    >
+                      {formatCOP(ob.amount)}
+                    </span>
 
-            {/* Lista de Gastos Fijos Perfectamente Alineada */}
-            {currentUserMetrics.obligations.length === 0 ? (
-              <div
-                style={{
-                  padding: '28px 16px',
-                  textAlign: 'center',
-                  borderRadius: '12px',
-                  border: '1px dashed var(--color-outline-variant)',
-                }}
-              >
-                <p
-                  style={{
-                    fontSize: '13px',
-                    color: 'var(--color-on-surface-variant)',
-                    marginBottom: '12px',
-                  }}
-                >
-                  No tienes gastos fijos registrados en esta vista ({periodLabel}).
-                </p>
-                <Button
-                  variant="primary"
-                  size="sm"
-                  onClick={() => openAddPopup('expense')}
-                >
-                  <Plus size={15} style={{ marginRight: '4px' }} /> Ingresar Gasto Fijo
-                </Button>
-              </div>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column' }}>
-                {currentUserMetrics.obligations.map((ob, index) => {
-                  const isNegative = ob.amount < 0;
-                  const isLast = index === currentUserMetrics.obligations.length - 1;
-                  return (
-                    <div
-                      key={`${ob.sourcePeriodKey}_${ob.id}`}
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteObligation(ob.id, ob.sourcePeriodKey, ob.ownerUid)}
                       style={{
                         display: 'flex',
                         alignItems: 'center',
-                        justifyContent: 'space-between',
-                        gap: '12px',
-                        padding: '12px 4px',
-                        borderBottom: isLast
-                          ? 'none'
-                          : '1px solid var(--color-surface-container)',
+                        justifyContent: 'center',
+                        width: '26px',
+                        height: '26px',
+                        borderRadius: '9999px',
+                        color: 'var(--color-outline)',
                       }}
+                      title="Eliminar gasto fijo"
                     >
-                      {/* Columna Izquierda: Check + Concepto + Etiqueta de Quincena */}
-                      <div
-                        onClick={() => handleTogglePaid(ob.id, ob.sourcePeriodKey)}
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '10px',
-                          flex: 1,
-                          minWidth: 0,
-                          cursor: 'pointer',
-                        }}
-                      >
-                        {ob.paid ? (
-                          <CheckCircle2
-                            size={18}
-                            color="var(--color-success)"
-                            style={{ flexShrink: 0 }}
-                          />
-                        ) : (
-                          <Circle
-                            size={18}
-                            color="var(--color-outline)"
-                            style={{ flexShrink: 0 }}
-                          />
-                        )}
-
-                        <div style={{ minWidth: 0, flex: 1 }}>
-                          <div
-                            style={{
-                              fontSize: '14px',
-                              fontWeight: 500,
-                              color: 'var(--color-on-surface)',
-                              textDecoration: ob.paid ? 'line-through' : 'none',
-                              opacity: ob.paid ? 0.6 : 1,
-                              whiteSpace: 'nowrap',
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                            }}
-                          >
-                            {ob.concept}
-                          </div>
-                          <div
-                            style={{
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: '6px',
-                              marginTop: '2px',
-                            }}
-                          >
-                            <span
-                              style={{
-                                fontSize: '11px',
-                                color: 'var(--color-on-surface-variant)',
-                              }}
-                            >
-                              {ob.quincenaTag}
-                            </span>
-                            {isNegative && (
-                              <span
-                                style={{
-                                  fontSize: '10px',
-                                  padding: '1px 6px',
-                                  borderRadius: '999px',
-                                  backgroundColor: 'rgba(16, 185, 129, 0.12)',
-                                  color: 'var(--color-success)',
-                                  fontWeight: 600,
-                                }}
-                              >
-                                Ahorro a favor
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Columna Derecha: Monto Tabular + Botón Eliminar */}
-                      <div
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '10px',
-                          flexShrink: 0,
-                        }}
-                      >
-                        <span
-                          style={{
-                            fontSize: '14px',
-                            fontWeight: 600,
-                            fontVariantNumeric: 'tabular-nums',
-                            color: isNegative
-                              ? 'var(--color-success)'
-                              : 'var(--color-on-surface)',
-                          }}
-                        >
-                          {formatCOP(ob.amount)}
-                        </span>
-
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteObligation(ob.id, ob.sourcePeriodKey)}
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            width: '28px',
-                            height: '28px',
-                            borderRadius: '8px',
-                            color: 'var(--color-outline)',
-                          }}
-                          title="Eliminar gasto fijo"
-                        >
-                          <Trash2 size={15} />
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </Card>
-
-          {/* =============================================================== */}
-          {/* BOLSILLO DE VARIABLES Y PAGOS ESPORÁDICOS DEL USUARIO           */}
-          {/* =============================================================== */}
-          <Card style={{ padding: '16px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div>
-                <h4 style={{ fontSize: '15px', fontWeight: 600, margin: 0 }}>
-                  Disponible para Pagos Esporádicos ({activeTargetName})
-                </h4>
-                <p
-                  style={{
-                    fontSize: '12px',
-                    color: 'var(--color-on-surface-variant)',
-                    marginTop: '2px',
-                  }}
-                >
-                  Restante de sueldo fijo + ingresos variables menos gastos extras
-                </p>
-              </div>
-              <Wallet size={18} color="var(--color-primary)" />
-            </div>
-
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: '1fr 1fr',
-                gap: '10px',
-                marginTop: '14px',
-              }}
-            >
-              <div
-                style={{
-                  padding: '10px 12px',
-                  borderRadius: '10px',
-                  backgroundColor: 'var(--color-surface-container-low)',
-                }}
-              >
-                <span style={{ fontSize: '11px', color: 'var(--color-on-surface-variant)' }}>
-                  Restante Sueldo Fijo
-                </span>
-                <div
-                  style={{
-                    fontWeight: 700,
-                    fontSize: '14px',
-                    marginTop: '2px',
-                    fontVariantNumeric: 'tabular-nums',
-                  }}
-                >
-                  {formatCOP(currentUserMetrics.fixedRemaining)}
-                </div>
-              </div>
-
-              <div
-                style={{
-                  padding: '10px 12px',
-                  borderRadius: '10px',
-                  backgroundColor: 'var(--color-surface-container-low)',
-                }}
-              >
-                <span style={{ fontSize: '11px', color: 'var(--color-on-surface-variant)' }}>
-                  + Ingresos Variables
-                </span>
-                <div
-                  style={{
-                    fontWeight: 700,
-                    fontSize: '14px',
-                    marginTop: '2px',
-                    color: 'var(--color-success)',
-                    fontVariantNumeric: 'tabular-nums',
-                  }}
-                >
-                  +{formatCOP(currentUserMetrics.variableIncome)}
-                </div>
-              </div>
-
-              <div
-                style={{
-                  padding: '10px 12px',
-                  borderRadius: '10px',
-                  backgroundColor: 'var(--color-surface-container-low)',
-                }}
-              >
-                <span style={{ fontSize: '11px', color: 'var(--color-on-surface-variant)' }}>
-                  Cupo para Extras
-                </span>
-                <div
-                  style={{
-                    fontWeight: 700,
-                    fontSize: '14px',
-                    marginTop: '2px',
-                    fontVariantNumeric: 'tabular-nums',
-                  }}
-                >
-                  {formatCOP(currentUserMetrics.totalAvailableForExtras)}
-                </div>
-              </div>
-
-              <div
-                style={{
-                  padding: '10px 12px',
-                  borderRadius: '10px',
-                  backgroundColor: 'var(--color-surface-container-low)',
-                }}
-              >
-                <span style={{ fontSize: '11px', color: 'var(--color-on-surface-variant)' }}>
-                  - Pagos Esporádicos
-                </span>
-                <div
-                  style={{
-                    fontWeight: 700,
-                    fontSize: '14px',
-                    marginTop: '2px',
-                    color: 'var(--color-error)',
-                    fontVariantNumeric: 'tabular-nums',
-                  }}
-                >
-                  -{formatCOP(currentUserMetrics.extraExpenses)}
-                </div>
-              </div>
-            </div>
-
-            <div
-              style={{
-                marginTop: '12px',
-                padding: '12px 14px',
-                borderRadius: '10px',
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                backgroundColor:
-                  currentUserMetrics.finalNetAvailable >= 0
-                    ? 'rgba(16, 185, 129, 0.1)'
-                    : 'rgba(239, 68, 68, 0.1)',
-              }}
-            >
-              <span style={{ fontWeight: 600, fontSize: '13px' }}>
-                Libre Real después de Extras
-              </span>
-              <span
-                style={{
-                  fontWeight: 700,
-                  fontSize: '16px',
-                  fontVariantNumeric: 'tabular-nums',
-                  color:
-                    currentUserMetrics.finalNetAvailable >= 0
-                      ? 'var(--color-success)'
-                      : 'var(--color-error)',
-                }}
-              >
-                {formatCOP(currentUserMetrics.finalNetAvailable)}
-              </span>
-            </div>
-          </Card>
-        </div>
-      ) : (
-        /* ================================================================= */
-        /* VISTA CONSOLIDADO GENERAL DEL HOGAR LIMPIA Y ALINEADA             */
-        /* ================================================================= */
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-          <Card style={{ padding: '16px' }}>
-            <span className="text-label-sm" style={{ color: 'var(--color-on-surface-variant)' }}>
-              CONSOLIDADO GENERAL DEL HOGAR · {periodLabel}
-            </span>
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(3, 1fr)',
-                gap: '8px',
-                marginTop: '12px',
-                padding: '12px',
-                borderRadius: '12px',
-                backgroundColor: 'var(--color-surface-container-low)',
-              }}
-            >
-              <div>
-                <div style={{ fontSize: '11px', color: 'var(--color-on-surface-variant)' }}>
-                  Sueldos Fijos
-                </div>
-                <div
-                  style={{
-                    fontSize: '14px',
-                    fontWeight: 700,
-                    marginTop: '2px',
-                    fontVariantNumeric: 'tabular-nums',
-                  }}
-                >
-                  {formatCOP(consolidatedMetrics.fixedSalary)}
-                </div>
-              </div>
-              <div
-                style={{
-                  borderLeft: '1px solid var(--color-outline-variant)',
-                  paddingLeft: '10px',
-                }}
-              >
-                <div style={{ fontSize: '11px', color: 'var(--color-on-surface-variant)' }}>
-                  Total Fijos
-                </div>
-                <div
-                  style={{
-                    fontSize: '14px',
-                    fontWeight: 700,
-                    color: 'var(--color-error)',
-                    marginTop: '2px',
-                    fontVariantNumeric: 'tabular-nums',
-                  }}
-                >
-                  {formatCOP(consolidatedMetrics.totalFixedObligations)}
-                </div>
-              </div>
-              <div
-                style={{
-                  borderLeft: '1px solid var(--color-outline-variant)',
-                  paddingLeft: '10px',
-                }}
-              >
-                <div style={{ fontSize: '11px', color: 'var(--color-on-surface-variant)' }}>
-                  Restante Fijos
-                </div>
-                <div
-                  style={{
-                    fontSize: '14px',
-                    fontWeight: 700,
-                    color: 'var(--color-success)',
-                    marginTop: '2px',
-                    fontVariantNumeric: 'tabular-nums',
-                  }}
-                >
-                  {formatCOP(consolidatedMetrics.fixedRemaining)}
-                </div>
-              </div>
-            </div>
-
-            <div
-              style={{
-                marginTop: '12px',
-                display: 'grid',
-                gridTemplateColumns: 'repeat(3, 1fr)',
-                gap: '8px',
-                fontSize: '12px',
-                padding: '0 4px',
-              }}
-            >
-              <div>
-                <div style={{ color: 'var(--color-on-surface-variant)', fontSize: '11px' }}>
-                  + Ingresos Variables
-                </div>
-                <div
-                  style={{
-                    fontWeight: 600,
-                    color: 'var(--color-success)',
-                    fontVariantNumeric: 'tabular-nums',
-                  }}
-                >
-                  +{formatCOP(consolidatedMetrics.variableIncome)}
-                </div>
-              </div>
-              <div>
-                <div style={{ color: 'var(--color-on-surface-variant)', fontSize: '11px' }}>
-                  - Pagos Esporádicos
-                </div>
-                <div
-                  style={{
-                    fontWeight: 600,
-                    color: 'var(--color-error)',
-                    fontVariantNumeric: 'tabular-nums',
-                  }}
-                >
-                  -{formatCOP(consolidatedMetrics.extraExpenses)}
-                </div>
-              </div>
-              <div>
-                <div style={{ color: 'var(--color-on-surface-variant)', fontSize: '11px' }}>
-                  Libre Neto Hogar
-                </div>
-                <div
-                  style={{
-                    fontWeight: 700,
-                    color: 'var(--color-primary)',
-                    fontSize: '14px',
-                    fontVariantNumeric: 'tabular-nums',
-                  }}
-                >
-                  {formatCOP(consolidatedMetrics.finalNetAvailable)}
-                </div>
-              </div>
-            </div>
-          </Card>
-
-          {/* Resumen Individual Lado a Lado */}
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: partner ? '1fr 1fr' : '1fr',
-              gap: '10px',
-            }}
-          >
-            {[
-              { name: myName, metrics: myMetrics, viewKey: 'me' as const },
-              ...(partner
-                ? [{ name: partnerName, metrics: partnerMetrics, viewKey: 'partner' as const }]
-                : []),
-            ].map((u) => (
-              <Card
-                key={u.name}
-                style={{ padding: '14px', cursor: 'pointer' }}
-                onClick={() => setSelectedView(u.viewKey)}
-              >
-                <div
-                  style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                    paddingBottom: '8px',
-                    marginBottom: '10px',
-                    borderBottom: '1px solid var(--color-surface-container)',
-                  }}
-                >
-                  <span style={{ fontWeight: 600, fontSize: '14px' }}>{u.name}</span>
-                  <span
-                    style={{
-                      fontSize: '11px',
-                      color: 'var(--color-primary)',
-                      fontWeight: 600,
-                    }}
-                  >
-                    Ver detalle →
-                  </span>
-                </div>
-
-                <div
-                  style={{
-                    fontSize: '12px',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '6px',
-                  }}
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span style={{ color: 'var(--color-on-surface-variant)' }}>Sueldo Fijo</span>
-                    <strong style={{ fontVariantNumeric: 'tabular-nums' }}>
-                      {formatCOP(u.metrics.fixedSalary)}
-                    </strong>
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span style={{ color: 'var(--color-on-surface-variant)' }}>Gastos Fijos</span>
-                    <strong
-                      style={{ color: 'var(--color-error)', fontVariantNumeric: 'tabular-nums' }}
-                    >
-                      {formatCOP(u.metrics.totalFixedObligations)}
-                    </strong>
-                  </div>
-                  <div
-                    style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      padding: '6px 8px',
-                      borderRadius: '8px',
-                      backgroundColor: 'var(--color-surface-container-low)',
-                      fontWeight: 600,
-                    }}
-                  >
-                    <span>Restante Fijo</span>
-                    <span
-                      style={{
-                        color:
-                          u.metrics.fixedRemaining >= 0
-                            ? 'var(--color-success)'
-                            : 'var(--color-error)',
-                        fontVariantNumeric: 'tabular-nums',
-                      }}
-                    >
-                      {formatCOP(u.metrics.fixedRemaining)}
-                    </span>
-                  </div>
-                  <div
-                    style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      marginTop: '2px',
-                    }}
-                  >
-                    <span style={{ color: 'var(--color-on-surface-variant)' }}>+ Variables</span>
-                    <span
-                      style={{
-                        color: 'var(--color-success)',
-                        fontWeight: 600,
-                        fontVariantNumeric: 'tabular-nums',
-                      }}
-                    >
-                      +{formatCOP(u.metrics.variableIncome)}
-                    </span>
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span style={{ color: 'var(--color-on-surface-variant)' }}>- Esporádicos</span>
-                    <span
-                      style={{
-                        color: 'var(--color-error)',
-                        fontWeight: 600,
-                        fontVariantNumeric: 'tabular-nums',
-                      }}
-                    >
-                      -{formatCOP(u.metrics.extraExpenses)}
-                    </span>
+                      <Trash2 size={14} />
+                    </button>
                   </div>
                 </div>
-              </Card>
-            ))}
+              );
+            })}
           </div>
-        </div>
-      )}
+        )}
+      </Card>
 
       {/* ================================================================= */}
       {/* POPUP MODAL LIMPIO PARA INGRESAR GASTO FIJO O SUELDO FIJO         */}
@@ -1599,16 +831,15 @@ export function FixedCashflowWorksheet({
       >
         <form
           onSubmit={handleSavePopup}
-          style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginTop: '8px' }}
+          style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '6px' }}
         >
-          {/* Selector Tipo: Gasto Fijo vs Ingreso Fijo */}
           <div
             style={{
               display: 'grid',
               gridTemplateColumns: '1fr 1fr',
               backgroundColor: 'var(--color-surface-container)',
               padding: '4px',
-              borderRadius: '10px',
+              borderRadius: '9999px',
               gap: '4px',
             }}
           >
@@ -1620,8 +851,8 @@ export function FixedCashflowWorksheet({
                 alignItems: 'center',
                 justifyContent: 'center',
                 gap: '6px',
-                padding: '9px',
-                borderRadius: '8px',
+                padding: '8px',
+                borderRadius: '9999px',
                 fontWeight: 600,
                 fontSize: '12px',
                 backgroundColor:
@@ -1645,8 +876,8 @@ export function FixedCashflowWorksheet({
                 alignItems: 'center',
                 justifyContent: 'center',
                 gap: '6px',
-                padding: '9px',
-                borderRadius: '8px',
+                padding: '8px',
+                borderRadius: '9999px',
                 fontWeight: 600,
                 fontSize: '12px',
                 backgroundColor:
@@ -1664,10 +895,9 @@ export function FixedCashflowWorksheet({
             </button>
           </div>
 
-          {/* Selector de Quincena */}
           <div>
             <label className="text-label-sm" style={{ color: 'var(--color-on-surface-variant)' }}>
-              Quincena en la que aplica
+              Quincena permanente (aplica a todos los meses)
             </label>
             <div
               style={{
@@ -1689,8 +919,8 @@ export function FixedCashflowWorksheet({
                     type="button"
                     onClick={() => setTargetQuincena(opt.id as 'q1' | 'q2' | 'both')}
                     style={{
-                      padding: '9px 6px',
-                      borderRadius: '8px',
+                      padding: '8px 6px',
+                      borderRadius: '9999px',
                       fontSize: '12px',
                       fontWeight: active ? 600 : 500,
                       border: active

@@ -3,7 +3,7 @@
   align-items: center;
   justify-content: center;
   gap: var(--spacing-xs);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-full);
   font-family: var(--font-family-base);
   font-weight: 600;
   transition: all 0.2s ease-in-out;
@@ -71,9 +71,9 @@
 
 /* Sizes */
 .size-sm {
-  padding: 6px 12px;
-  font-size: 14px;
-  border-radius: var(--radius-sm);
+  padding: 6px 14px;
+  font-size: 13px;
+  border-radius: var(--radius-full);
 }
 
 .size-md {

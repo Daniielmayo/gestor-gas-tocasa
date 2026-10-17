@@ -107,12 +107,24 @@ export default function Deudas() {
 
   useEffect(() => {
     if (!user) return;
+    const hhId = household?.id || '';
+
+    const buildOwnerFilter = () => {
+      const clauses: any[] = [
+        where('ownerId', '==', user.uid),
+        where('sharedWith', 'array-contains', user.uid),
+      ];
+      if (partnerUid) {
+        clauses.push(where('ownerId', '==', partnerUid));
+      }
+      if (hhId) {
+        clauses.push(where('householdId', '==', hhId));
+      }
+      return or(...clauses);
+    };
 
     const debtsRef = collection(db, 'debts');
-    const qDebts = query(
-      debtsRef,
-      or(where('ownerId', '==', user.uid), where('sharedWith', 'array-contains', user.uid))
-    );
+    const qDebts = query(debtsRef, buildOwnerFilter());
     const unsubDebts = onSnapshot(qDebts, (snapshot) => {
       const data: DebtDoc[] = [];
       snapshot.forEach((d) => data.push({ ...(d.data() as DebtDoc), id: d.id }));
@@ -121,10 +133,7 @@ export default function Deudas() {
     });
 
     const txRef = collection(db, 'transactions');
-    const qTx = query(
-      txRef,
-      or(where('ownerId', '==', user.uid), where('sharedWith', 'array-contains', user.uid))
-    );
+    const qTx = query(txRef, buildOwnerFilter());
     const unsubTx = onSnapshot(qTx, (snapshot) => {
       const list: EnhancedTransaction[] = [];
       snapshot.forEach((d) => {
@@ -135,10 +144,7 @@ export default function Deudas() {
     });
 
     const rpRef = collection(db, 'recurringPayments');
-    const qRp = query(
-      rpRef,
-      or(where('ownerId', '==', user.uid), where('sharedWith', 'array-contains', user.uid))
-    );
+    const qRp = query(rpRef, buildOwnerFilter());
     const unsubRp = onSnapshot(qRp, (snapshot) => {
       const data: any[] = [];
       snapshot.forEach((d) => data.push({ id: d.id, ...d.data() }));
@@ -150,7 +156,7 @@ export default function Deudas() {
       unsubTx();
       unsubRp();
     };
-  }, [user]);
+  }, [user, partnerUid, household?.id]);
 
   const creditCards = useMemo(
     () => paymentMethods.filter((pm) => pm.type === 'credito' && pm.active !== false),

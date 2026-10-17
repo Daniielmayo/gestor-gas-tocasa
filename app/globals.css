@@ -76,6 +76,7 @@ a {
 button {
   font-family: inherit;
   border: none;
+  border-radius: var(--radius-full) !important;
   cursor: pointer;
   background: none;
 }

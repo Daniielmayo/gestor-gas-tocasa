@@ -108,12 +108,21 @@ export default function MetasAhorro() {
   useEffect(() => {
     if (!user) return;
     setContributorUid(user.uid);
+    const hhId = household?.id || '';
+
+    const clauses: any[] = [
+      where('ownerId', '==', user.uid),
+      where('sharedWith', 'array-contains', user.uid),
+    ];
+    if (partnerUid) {
+      clauses.push(where('ownerId', '==', partnerUid));
+    }
+    if (hhId) {
+      clauses.push(where('householdId', '==', hhId));
+    }
 
     const savRef = collection(db, 'savings');
-    const qSav = query(
-      savRef,
-      or(where('ownerId', '==', user.uid), where('sharedWith', 'array-contains', user.uid))
-    );
+    const qSav = query(savRef, or(...clauses));
     const unsubSav = onSnapshot(qSav, (snapshot) => {
       const data: SavingGoal[] = [];
       snapshot.forEach((d) => data.push({ id: d.id, ...d.data() } as SavingGoal));
@@ -124,14 +133,14 @@ export default function MetasAhorro() {
     return () => {
       unsubSav();
     };
-  }, [user]);
+  }, [user, partnerUid, household?.id]);
 
   const handleCreateSaving = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!savingTitle.trim() || !savingTarget || isSubmitting || !user) return;
     setIsSubmitting(true);
     try {
-      const sharedArray = savingScope === 'conjunto' && partnerUid ? [partnerUid] : [];
+      const sharedArray = partnerUid ? [partnerUid] : [];
       await addDoc(collection(db, 'savings'), {
         householdId: household?.id || 'default',
         title: savingTitle.trim(),
@@ -206,7 +215,7 @@ export default function MetasAhorro() {
         tags: ['ahorro'],
         ownerId: user.uid,
         ownerName: profile?.displayName?.split(' ')[0] || 'Usuario',
-        sharedWith: goalScope === 'conjunto' && partnerUid ? [partnerUid] : [],
+        sharedWith: partnerUid ? [partnerUid] : [],
         deletedAt: null,
         createdAt: Timestamp.now(),
       });

@@ -6,10 +6,23 @@ import { Input } from '@/components/ui/Input';
 import { useAuth } from '@/context/AuthContext';
 import { useHousehold } from '@/context/HouseholdContext';
 import { db } from '@/lib/firebase';
-import { collection, addDoc, updateDoc, deleteDoc, doc, serverTimestamp } from 'firebase/firestore';
+import {
+  collection,
+  addDoc,
+  updateDoc,
+  deleteDoc,
+  setDoc,
+  doc,
+  serverTimestamp,
+  arrayUnion,
+} from 'firebase/firestore';
 import {
   PaymentMethod,
   PaymentMethodType,
+  CategoryDef,
+  TagDef,
+  KnownPlace,
+  IncomeSourceDef,
   SplitRule,
   IncomeFrequency,
   Scope,
@@ -19,13 +32,14 @@ import {
   Users,
   CreditCard,
   Tag as TagIcon,
-  MapPin,
   Briefcase,
   Trash2,
+  Pencil,
   Copy,
   Check,
   ShieldCheck,
   Store,
+  X,
 } from 'lucide-react';
 
 export type ConfigTabId = 'hogar' | 'metodos' | 'catalogo' | 'lugares' | 'ingresos';
@@ -67,7 +81,8 @@ export function HouseholdConfigModal({
   const [linkStatus, setLinkStatus] = useState<{ ok?: boolean; msg: string } | null>(null);
   const [copiedCode, setCopiedCode] = useState(false);
 
-  // 1. Payment method form state
+  // 1. Payment method form state (Create + Edit + Delete)
+  const [editingPmId, setEditingPmId] = useState<string | null>(null);
   const [pmType, setPmType] = useState<PaymentMethodType>('credito');
   const [pmAlias, setPmAlias] = useState('');
   const [pmLast4, setPmLast4] = useState('');
@@ -78,14 +93,18 @@ export function HouseholdConfigModal({
   const [pmDueDay, setPmDueDay] = useState('');
   const [isSavingPm, setIsSavingPm] = useState(false);
 
-  // 2. Category & Tag form state
+  // 2. Category & Tag form state (Create + Edit + Delete)
+  const [editingCatId, setEditingCatId] = useState<string | null>(null);
   const [catName, setCatName] = useState('');
   const [catType, setCatType] = useState<'expense' | 'income'>('expense');
   const [catColor, setCatColor] = useState('#3B82F6');
+
+  const [editingTagId, setEditingTagId] = useState<string | null>(null);
   const [newTagName, setNewTagName] = useState('');
   const [newTagColor, setNewTagColor] = useState('#10B981');
 
-  // 3. Places / Merchants form state
+  // 3. Places / Merchants form state (Create + Edit + Delete)
+  const [editingPlaceId, setEditingPlaceId] = useState<string | null>(null);
   const [placeName, setPlaceName] = useState('');
   const [placeCat, setPlaceCat] = useState('Supermercado');
   const [placeTagsInput, setPlaceTagsInput] = useState('');
@@ -93,7 +112,8 @@ export function HouseholdConfigModal({
   const [placeScope, setPlaceScope] = useState<Scope>('personal');
   const [isSavingPlace, setIsSavingPlace] = useState(false);
 
-  // 4. Income Sources form state
+  // 4. Income Sources form state (Create + Edit + Delete)
+  const [editingIncId, setEditingIncId] = useState<string | null>(null);
   const [incName, setIncName] = useState('');
   const [incType, setIncType] = useState<'fijo' | 'variable'>('fijo');
   const [incAmount, setIncAmount] = useState('');
@@ -121,8 +141,32 @@ export function HouseholdConfigModal({
     if (res.ok) setInviteInput('');
   };
 
-  // --- Handlers: Payment Methods ---
-  const handleAddPaymentMethod = async (e: React.FormEvent) => {
+  // --- Handlers: Payment Methods (Create, Edit, Toggle, Delete) ---
+  const resetPmForm = () => {
+    setEditingPmId(null);
+    setPmType('credito');
+    setPmAlias('');
+    setPmLast4('');
+    setPmBank('');
+    setPmHolder(user?.uid || '');
+    setPmCreditLimit('');
+    setPmCutDay('');
+    setPmDueDay('');
+  };
+
+  const startEditPaymentMethod = (pm: PaymentMethod) => {
+    setEditingPmId(pm.id);
+    setPmType(pm.type);
+    setPmAlias(pm.alias);
+    setPmLast4(pm.last4 || '');
+    setPmBank(pm.bank || '');
+    setPmHolder(pm.holderUserId || user?.uid || '');
+    setPmCreditLimit(pm.creditLimit ? formatInputCOP(String(pm.creditLimit)) : '');
+    setPmCutDay(pm.cutDay ? String(pm.cutDay) : '');
+    setPmDueDay(pm.dueDay ? String(pm.dueDay) : '');
+  };
+
+  const handleSavePaymentMethod = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user || !pmAlias.trim() || isSavingPm) return;
     setIsSavingPm(true);
@@ -133,7 +177,7 @@ export function HouseholdConfigModal({
           ? profile?.displayName?.split(' ')[0] || 'Yo'
           : partner?.displayName?.split(' ')[0] || 'Pareja';
 
-      await addDoc(collection(db, 'paymentMethods'), {
+      const payload = {
         householdId: household?.id || 'default',
         type: pmType,
         alias: pmAlias.trim(),
@@ -144,19 +188,22 @@ export function HouseholdConfigModal({
         creditLimit: pmType === 'credito' && pmCreditLimit ? parseCOP(pmCreditLimit) : null,
         cutDay: pmType === 'credito' && pmCutDay ? Number(pmCutDay) : null,
         dueDay: pmType === 'credito' && pmDueDay ? Number(pmDueDay) : null,
-        active: true,
-        ownerId: user.uid,
         sharedWith: partnerUid ? [partnerUid] : [],
-        createdAt: serverTimestamp(),
-      });
-      setPmAlias('');
-      setPmLast4('');
-      setPmBank('');
-      setPmCreditLimit('');
-      setPmCutDay('');
-      setPmDueDay('');
+      };
+
+      if (editingPmId) {
+        await updateDoc(doc(db, 'paymentMethods', editingPmId), payload);
+      } else {
+        await addDoc(collection(db, 'paymentMethods'), {
+          ...payload,
+          active: true,
+          ownerId: user.uid,
+          createdAt: serverTimestamp(),
+        });
+      }
+      resetPmForm();
     } catch (err) {
-      console.error('Error adding payment method:', err);
+      console.error('Error saving payment method:', err);
     } finally {
       setIsSavingPm(false);
     }
@@ -172,12 +219,35 @@ export function HouseholdConfigModal({
     }
   };
 
-  // --- Handlers: Categories & Tags ---
-  const handleAddCategory = async (e: React.FormEvent) => {
+  const handleDeletePaymentMethod = async (pmId: string) => {
+    try {
+      await deleteDoc(doc(db, 'paymentMethods', pmId));
+      if (editingPmId === pmId) resetPmForm();
+    } catch (err) {
+      console.error('Error deleting payment method:', err);
+    }
+  };
+
+  // --- Handlers: Categories (Create, Edit, Delete) ---
+  const resetCategoryForm = () => {
+    setEditingCatId(null);
+    setCatName('');
+    setCatType('expense');
+    setCatColor('#3B82F6');
+  };
+
+  const startEditCategory = (cat: CategoryDef) => {
+    setEditingCatId(cat.id);
+    setCatName(cat.name);
+    setCatType(cat.type);
+    setCatColor(cat.color || '#3B82F6');
+  };
+
+  const handleSaveCategory = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user || !catName.trim()) return;
     try {
-      await addDoc(collection(db, 'financeCategories'), {
+      const payload = {
         householdId: household?.id || 'default',
         name: catName.trim(),
         type: catType,
@@ -185,42 +255,112 @@ export function HouseholdConfigModal({
         icon: 'Tag',
         ownerId: user.uid,
         sharedWith: partnerUid ? [partnerUid] : [],
-      });
-      setCatName('');
+      };
+
+      if (editingCatId) {
+        await setDoc(doc(db, 'financeCategories', editingCatId), payload, { merge: true });
+      } else {
+        await addDoc(collection(db, 'financeCategories'), payload);
+      }
+      resetCategoryForm();
     } catch (err) {
-      console.error('Error adding category:', err);
+      console.error('Error saving category:', err);
     }
   };
 
-  const handleAddTag = async (e: React.FormEvent) => {
+  const handleDeleteCategory = async (cat: CategoryDef) => {
+    try {
+      if (cat.id.startsWith('def-') && household) {
+        await updateDoc(doc(db, 'households', household.id), {
+          disabledDefaultCategoryIds: arrayUnion(cat.id),
+        });
+      }
+      try {
+        await deleteDoc(doc(db, 'financeCategories', cat.id));
+      } catch {
+        // Ignore if default category wasn't stored in financeCategories collection
+      }
+      if (editingCatId === cat.id) resetCategoryForm();
+    } catch (err) {
+      console.error('Error deleting category:', err);
+    }
+  };
+
+  // --- Handlers: Tags (Create, Edit, Delete) ---
+  const resetTagForm = () => {
+    setEditingTagId(null);
+    setNewTagName('');
+    setNewTagColor('#10B981');
+  };
+
+  const startEditTag = (t: TagDef) => {
+    setEditingTagId(t.id);
+    setNewTagName(t.name);
+    setNewTagColor(t.color || '#10B981');
+  };
+
+  const handleSaveTag = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user || !newTagName.trim()) return;
     try {
       const clean = newTagName.trim().toLowerCase().replace(/^#/, '');
-      await addDoc(collection(db, 'tags'), {
+      const payload = {
         householdId: household?.id || 'default',
         name: clean,
         color: newTagColor,
         ownerId: user.uid,
         sharedWith: partnerUid ? [partnerUid] : [],
-      });
-      setNewTagName('');
+      };
+
+      if (editingTagId) {
+        await setDoc(doc(db, 'tags', editingTagId), payload, { merge: true });
+      } else {
+        await addDoc(collection(db, 'tags'), payload);
+      }
+      resetTagForm();
     } catch (err) {
-      console.error('Error adding tag:', err);
+      console.error('Error saving tag:', err);
     }
   };
 
   const handleDeleteTag = async (tagId: string) => {
-    if (tagId.startsWith('def-tag-')) return;
     try {
-      await deleteDoc(doc(db, 'tags', tagId));
+      if (tagId.startsWith('def-tag-') && household) {
+        await updateDoc(doc(db, 'households', household.id), {
+          disabledDefaultTagIds: arrayUnion(tagId),
+        });
+      }
+      try {
+        await deleteDoc(doc(db, 'tags', tagId));
+      } catch {
+        // Ignore if default tag wasn't in Firestore tags collection
+      }
+      if (editingTagId === tagId) resetTagForm();
     } catch (err) {
       console.error('Error deleting tag:', err);
     }
   };
 
-  // --- Handlers: Known Places / Merchants ---
-  const handleAddPlace = async (e: React.FormEvent) => {
+  // --- Handlers: Known Places / Merchants (Create, Edit, Delete) ---
+  const resetPlaceForm = () => {
+    setEditingPlaceId(null);
+    setPlaceName('');
+    setPlaceCat('Supermercado');
+    setPlaceTagsInput('');
+    setPlacePmId('');
+    setPlaceScope('personal');
+  };
+
+  const startEditPlace = (pl: KnownPlace) => {
+    setEditingPlaceId(pl.id);
+    setPlaceName(pl.name);
+    setPlaceCat(pl.defaultCategory || 'Supermercado');
+    setPlaceTagsInput((pl.defaultTags || []).join(', '));
+    setPlacePmId(pl.defaultPaymentMethodId || '');
+    setPlaceScope(pl.defaultScope || 'personal');
+  };
+
+  const handleSavePlace = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user || !placeName.trim() || isSavingPlace) return;
     setIsSavingPlace(true);
@@ -230,22 +370,28 @@ export function HouseholdConfigModal({
         .map((t) => t.trim().toLowerCase().replace(/^#/, ''))
         .filter(Boolean);
 
-      await addDoc(collection(db, 'places'), {
+      const payload = {
         householdId: household?.id || 'default',
         name: placeName.trim(),
         defaultCategory: placeCat || 'Supermercado',
         defaultTags: parsedTags,
         defaultPaymentMethodId: placePmId || null,
         defaultScope: placeScope,
-        ownerId: user.uid,
         sharedWith: partnerUid ? [partnerUid] : [],
-        createdAt: serverTimestamp(),
-      });
-      setPlaceName('');
-      setPlaceTagsInput('');
-      setPlacePmId('');
+      };
+
+      if (editingPlaceId) {
+        await updateDoc(doc(db, 'places', editingPlaceId), payload);
+      } else {
+        await addDoc(collection(db, 'places'), {
+          ...payload,
+          ownerId: user.uid,
+          createdAt: serverTimestamp(),
+        });
+      }
+      resetPlaceForm();
     } catch (err) {
-      console.error('Error adding place:', err);
+      console.error('Error saving place:', err);
     } finally {
       setIsSavingPlace(false);
     }
@@ -254,18 +400,41 @@ export function HouseholdConfigModal({
   const handleDeletePlace = async (placeId: string) => {
     try {
       await deleteDoc(doc(db, 'places', placeId));
+      if (editingPlaceId === placeId) resetPlaceForm();
     } catch (err) {
       console.error('Error deleting place:', err);
     }
   };
 
-  // --- Handlers: Income Sources ---
-  const handleAddIncomeSource = async (e: React.FormEvent) => {
+  // --- Handlers: Income Sources (Create, Edit, Delete) ---
+  const resetIncomeSourceForm = () => {
+    setEditingIncId(null);
+    setIncName('');
+    setIncType('fijo');
+    setIncAmount('');
+    setIncFreq('quincenal');
+    setIncPayDay('15');
+    setIncCategory('Sueldo / Quincena');
+    setIncScope('personal');
+  };
+
+  const startEditIncomeSource = (src: IncomeSourceDef) => {
+    setEditingIncId(src.id);
+    setIncName(src.name);
+    setIncType(src.type || 'fijo');
+    setIncAmount(src.defaultAmount ? formatInputCOP(String(src.defaultAmount)) : '');
+    setIncFreq(src.frequency || 'quincenal');
+    setIncPayDay(src.payDay ? String(src.payDay) : '15');
+    setIncCategory(src.defaultCategory || 'Sueldo / Quincena');
+    setIncScope(src.defaultScope || 'personal');
+  };
+
+  const handleSaveIncomeSource = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user || !incName.trim() || isSavingInc) return;
     setIsSavingInc(true);
     try {
-      await addDoc(collection(db, 'incomeSources'), {
+      const payload = {
         householdId: household?.id || 'default',
         name: incName.trim(),
         type: incType,
@@ -274,15 +443,22 @@ export function HouseholdConfigModal({
         payDay: incPayDay ? Number(incPayDay) : null,
         defaultCategory: incCategory || 'Sueldo / Quincena',
         defaultScope: incScope,
-        active: true,
-        ownerId: user.uid,
         sharedWith: partnerUid ? [partnerUid] : [],
-        createdAt: serverTimestamp(),
-      });
-      setIncName('');
-      setIncAmount('');
+      };
+
+      if (editingIncId) {
+        await updateDoc(doc(db, 'incomeSources', editingIncId), payload);
+      } else {
+        await addDoc(collection(db, 'incomeSources'), {
+          ...payload,
+          active: true,
+          ownerId: user.uid,
+          createdAt: serverTimestamp(),
+        });
+      }
+      resetIncomeSourceForm();
     } catch (err) {
-      console.error('Error adding income source:', err);
+      console.error('Error saving income source:', err);
     } finally {
       setIsSavingInc(false);
     }
@@ -291,6 +467,7 @@ export function HouseholdConfigModal({
   const handleDeleteIncomeSource = async (id: string) => {
     try {
       await deleteDoc(doc(db, 'incomeSources', id));
+      if (editingIncId === id) resetIncomeSourceForm();
     } catch (err) {
       console.error('Error deleting income source:', err);
     }
@@ -306,7 +483,7 @@ export function HouseholdConfigModal({
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Centro de Configuraciones">
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginTop: '8px' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginTop: '6px' }}>
         {/* Scrollable Navigation Tabs */}
         <div
           style={{
@@ -314,7 +491,7 @@ export function HouseholdConfigModal({
             overflowX: 'auto',
             background: 'var(--color-surface-container)',
             padding: '4px',
-            borderRadius: '12px',
+            borderRadius: '9999px',
             gap: '4px',
           }}
         >
@@ -332,7 +509,7 @@ export function HouseholdConfigModal({
                   justifyContent: 'center',
                   gap: '6px',
                   padding: '8px 11px',
-                  borderRadius: '8px',
+                  borderRadius: '9999px',
                   fontSize: '12px',
                   fontWeight: active ? 600 : 500,
                   backgroundColor: active ? 'var(--color-primary)' : 'transparent',
@@ -351,13 +528,13 @@ export function HouseholdConfigModal({
         {/* TAB 1: MÉTODOS DE PAGO Y TARJETAS (RF-02)                           */}
         {/* =================================================================== */}
         {activeTab === 'metodos' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
             <div
               style={{
                 display: 'flex',
                 alignItems: 'center',
                 gap: '8px',
-                padding: '10px 12px',
+                padding: '8px 12px',
                 borderRadius: '10px',
                 backgroundColor: 'rgba(16, 185, 129, 0.1)',
                 color: '#065F46',
@@ -371,7 +548,7 @@ export function HouseholdConfigModal({
             </div>
 
             <form
-              onSubmit={handleAddPaymentMethod}
+              onSubmit={handleSavePaymentMethod}
               style={{
                 display: 'flex',
                 flexDirection: 'column',
@@ -379,8 +556,31 @@ export function HouseholdConfigModal({
                 padding: '12px',
                 borderRadius: '12px',
                 backgroundColor: 'var(--color-surface-container-low)',
+                border: editingPmId ? '1.5px solid var(--color-primary)' : 'none',
               }}
             >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span className="text-label-sm">
+                  {editingPmId ? 'Editando Tarjeta / Método' : 'Nueva Tarjeta / Método de Pago'}
+                </span>
+                {editingPmId && (
+                  <button
+                    type="button"
+                    onClick={resetPmForm}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      fontSize: '11px',
+                      color: 'var(--color-error)',
+                      fontWeight: 600,
+                    }}
+                  >
+                    <X size={13} /> Cancelar edición
+                  </button>
+                )}
+              </div>
+
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
                 <div>
                   <label className="text-label-sm">Tipo</label>
@@ -480,7 +680,7 @@ export function HouseholdConfigModal({
               )}
 
               <Button type="submit" variant="primary" disabled={!pmAlias.trim() || isSavingPm}>
-                + Guardar Tarjeta / Método
+                {editingPmId ? 'Guardar Cambios de Tarjeta' : '+ Guardar Tarjeta / Método'}
               </Button>
             </form>
 
@@ -500,16 +700,20 @@ export function HouseholdConfigModal({
                     display: 'flex',
                     justifyContent: 'space-between',
                     alignItems: 'center',
+                    gap: '8px',
                     padding: '10px 12px',
                     borderRadius: '10px',
                     backgroundColor: pm.active
                       ? 'var(--color-surface-container-lowest)'
                       : 'var(--color-surface-container)',
-                    border: '1px solid var(--color-outline-variant)',
-                    opacity: pm.active ? 1 : 0.6,
+                    border:
+                      editingPmId === pm.id
+                        ? '1.5px solid var(--color-primary)'
+                        : '1px solid var(--color-outline-variant)',
+                    opacity: pm.active ? 1 : 0.65,
                   }}
                 >
-                  <div>
+                  <div style={{ minWidth: 0, flex: 1 }}>
                     <div style={{ fontWeight: 600, fontSize: '14px' }}>
                       {pm.alias} {pm.last4 ? `•••• ${pm.last4}` : ''}
                     </div>
@@ -520,22 +724,53 @@ export function HouseholdConfigModal({
                       {!pm.active && ' • (Inactivo)'}
                     </div>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => togglePaymentMethodActive(pm)}
-                    style={{
-                      padding: '6px 10px',
-                      borderRadius: '8px',
-                      fontSize: '12px',
-                      backgroundColor: pm.active
-                        ? 'rgba(239, 68, 68, 0.1)'
-                        : 'rgba(16, 185, 129, 0.15)',
-                      color: pm.active ? 'var(--color-error)' : 'var(--color-success)',
-                      fontWeight: 600,
-                    }}
-                  >
-                    {pm.active ? 'Desactivar' : 'Activar'}
-                  </button>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+                    <button
+                      type="button"
+                      onClick={() => startEditPaymentMethod(pm)}
+                      style={{
+                        padding: '6px 8px',
+                        color: 'var(--color-primary)',
+                        backgroundColor: 'var(--color-primary-container)',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                      title="Editar tarjeta"
+                    >
+                      <Pencil size={13} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => togglePaymentMethodActive(pm)}
+                      style={{
+                        padding: '5px 10px',
+                        fontSize: '11px',
+                        backgroundColor: pm.active
+                          ? 'rgba(245, 158, 11, 0.14)'
+                          : 'rgba(16, 185, 129, 0.15)',
+                        color: pm.active ? '#B45309' : 'var(--color-success)',
+                        fontWeight: 600,
+                      }}
+                    >
+                      {pm.active ? 'Pausar' : 'Activar'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeletePaymentMethod(pm.id)}
+                      style={{
+                        padding: '6px 8px',
+                        color: 'var(--color-error)',
+                        backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                      title="Eliminar tarjeta"
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -546,19 +781,40 @@ export function HouseholdConfigModal({
         {/* TAB 2: CATEGORÍAS Y TAGS (RF-04)                                    */}
         {/* =================================================================== */}
         {activeTab === 'catalogo' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
             <form
-              onSubmit={handleAddCategory}
+              onSubmit={handleSaveCategory}
               style={{
                 display: 'flex',
                 flexDirection: 'column',
-                gap: '10px',
+                gap: '8px',
                 padding: '12px',
                 borderRadius: '12px',
                 backgroundColor: 'var(--color-surface-container-low)',
+                border: editingCatId ? '1.5px solid var(--color-primary)' : 'none',
               }}
             >
-              <span className="text-label-sm">Crear Nueva Categoría</span>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span className="text-label-sm">
+                  {editingCatId ? 'Editando Categoría' : 'Crear Nueva Categoría'}
+                </span>
+                {editingCatId && (
+                  <button
+                    type="button"
+                    onClick={resetCategoryForm}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      fontSize: '11px',
+                      color: 'var(--color-error)',
+                      fontWeight: 600,
+                    }}
+                  >
+                    <X size={13} /> Cancelar
+                  </button>
+                )}
+              </div>
               <div
                 style={{
                   display: 'grid',
@@ -606,17 +862,17 @@ export function HouseholdConfigModal({
                 />
               </div>
               <Button type="submit" variant="primary" size="sm" disabled={!catName.trim()}>
-                + Guardar Categoría
+                {editingCatId ? 'Actualizar Categoría' : '+ Guardar Categoría'}
               </Button>
             </form>
 
             <div>
               <span className="text-label-sm" style={{ display: 'block', marginBottom: '6px' }}>
-                Categorías Activas
+                Categorías Activas (Toca el lápiz para editar o × para eliminar)
               </span>
               <div
                 style={{
-                  maxHeight: '130px',
+                  maxHeight: '145px',
                   overflowY: 'auto',
                   display: 'flex',
                   flexWrap: 'wrap',
@@ -629,24 +885,44 @@ export function HouseholdConfigModal({
                     style={{
                       display: 'inline-flex',
                       alignItems: 'center',
-                      gap: '6px',
+                      gap: '5px',
                       padding: '4px 10px',
                       borderRadius: '999px',
                       fontSize: '12px',
-                      backgroundColor: 'var(--color-surface-container)',
+                      backgroundColor:
+                        editingCatId === c.id
+                          ? 'var(--color-primary-container)'
+                          : 'var(--color-surface-container)',
                       borderLeft: `4px solid ${c.color}`,
                     }}
                   >
-                    {c.name}
-                    {!c.isDefault && (
-                      <button
-                        type="button"
-                        onClick={() => deleteDoc(doc(db, 'financeCategories', c.id))}
-                        style={{ color: 'var(--color-error)', marginLeft: '2px', fontWeight: 700 }}
-                      >
-                        ×
-                      </button>
-                    )}
+                    <span>{c.name}</span>
+                    <button
+                      type="button"
+                      onClick={() => startEditCategory(c)}
+                      style={{
+                        color: 'var(--color-primary)',
+                        padding: '2px',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                      }}
+                      title="Editar categoría"
+                    >
+                      <Pencil size={11} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteCategory(c)}
+                      style={{
+                        color: 'var(--color-error)',
+                        padding: '2px',
+                        fontWeight: 700,
+                        lineHeight: 1,
+                      }}
+                      title="Eliminar categoría"
+                    >
+                      ×
+                    </button>
                   </span>
                 ))}
               </div>
@@ -661,9 +937,29 @@ export function HouseholdConfigModal({
                 gap: '10px',
               }}
             >
-              <span className="text-label-sm">Gestionar #Tags Transversales</span>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span className="text-label-sm">
+                  {editingTagId ? 'Editando #Tag' : 'Gestionar #Tags Transversales'}
+                </span>
+                {editingTagId && (
+                  <button
+                    type="button"
+                    onClick={resetTagForm}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      fontSize: '11px',
+                      color: 'var(--color-error)',
+                      fontWeight: 600,
+                    }}
+                  >
+                    <X size={13} /> Cancelar
+                  </button>
+                )}
+              </div>
               <form
-                onSubmit={handleAddTag}
+                onSubmit={handleSaveTag}
                 style={{ display: 'flex', gap: '8px', alignItems: 'center' }}
               >
                 <input
@@ -691,37 +987,66 @@ export function HouseholdConfigModal({
                     cursor: 'pointer',
                   }}
                 />
-                <Button type="submit" variant="secondary" size="sm" disabled={!newTagName.trim()}>
-                  + Tag
+                <Button type="submit" variant="primary" size="sm" disabled={!newTagName.trim()}>
+                  {editingTagId ? 'Guardar' : '+ Tag'}
                 </Button>
               </form>
 
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', maxHeight: '110px', overflowY: 'auto' }}>
+              <div
+                style={{
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  gap: '6px',
+                  maxHeight: '115px',
+                  overflowY: 'auto',
+                }}
+              >
                 {tags.map((t) => (
                   <span
                     key={t.id}
                     style={{
                       display: 'inline-flex',
                       alignItems: 'center',
-                      gap: '4px',
+                      gap: '5px',
                       padding: '4px 10px',
                       borderRadius: '999px',
                       fontSize: '12px',
-                      backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                      backgroundColor:
+                        editingTagId === t.id
+                          ? 'var(--color-primary-container)'
+                          : 'rgba(59, 130, 246, 0.1)',
                       color: 'var(--color-primary-dark)',
                       fontWeight: 500,
+                      borderLeft: t.color ? `3px solid ${t.color}` : undefined,
                     }}
                   >
-                    #{t.name}
-                    {!t.id.startsWith('def-tag-') && (
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteTag(t.id)}
-                        style={{ color: 'var(--color-error)', marginLeft: '2px', fontWeight: 700 }}
-                      >
-                        ×
-                      </button>
-                    )}
+                    <span>#{t.name}</span>
+                    <button
+                      type="button"
+                      onClick={() => startEditTag(t)}
+                      style={{
+                        color: 'var(--color-primary)',
+                        padding: '2px',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                      }}
+                      title="Editar tag"
+                    >
+                      <Pencil size={11} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteTag(t.id)}
+                      style={{
+                        color: 'var(--color-error)',
+                        padding: '2px',
+                        fontWeight: 700,
+                        lineHeight: 1,
+                      }}
+                      title="Eliminar tag"
+                    >
+                      ×
+                    </button>
                   </span>
                 ))}
               </div>
@@ -733,13 +1058,13 @@ export function HouseholdConfigModal({
         {/* TAB 3: LUGARES Y COMERCIOS FRECUENTES (RF-03 + Autocompletado)      */}
         {/* =================================================================== */}
         {activeTab === 'lugares' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
             <p className="text-body-sm" style={{ color: 'var(--color-on-surface-variant)' }}>
               Configura tus lugares o comercios habituales (ej. Éxito, Dolarcity, Ara, Gasolinera). Al seleccionarlos al crear un gasto, se autocompletará su categoría, tags y tarjeta favorita.
             </p>
 
             <form
-              onSubmit={handleAddPlace}
+              onSubmit={handleSavePlace}
               style={{
                 display: 'flex',
                 flexDirection: 'column',
@@ -747,8 +1072,31 @@ export function HouseholdConfigModal({
                 padding: '12px',
                 borderRadius: '12px',
                 backgroundColor: 'var(--color-surface-container-low)',
+                border: editingPlaceId ? '1.5px solid var(--color-primary)' : 'none',
               }}
             >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span className="text-label-sm">
+                  {editingPlaceId ? 'Editando Comercio / Lugar' : 'Nuevo Comercio / Lugar'}
+                </span>
+                {editingPlaceId && (
+                  <button
+                    type="button"
+                    onClick={resetPlaceForm}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      fontSize: '11px',
+                      color: 'var(--color-error)',
+                      fontWeight: 600,
+                    }}
+                  >
+                    <X size={13} /> Cancelar edición
+                  </button>
+                )}
+              </div>
+
               <div style={{ display: 'grid', gridTemplateColumns: '1.3fr 1fr', gap: '8px' }}>
                 <Input
                   label="Nombre del Comercio / Lugar"
@@ -830,7 +1178,7 @@ export function HouseholdConfigModal({
               />
 
               <Button type="submit" variant="primary" disabled={!placeName.trim() || isSavingPlace}>
-                + Guardar Comercio / Lugar
+                {editingPlaceId ? 'Guardar Cambios del Comercio' : '+ Guardar Comercio / Lugar'}
               </Button>
             </form>
 
@@ -855,13 +1203,17 @@ export function HouseholdConfigModal({
                       display: 'flex',
                       justifyContent: 'space-between',
                       alignItems: 'center',
+                      gap: '8px',
                       padding: '10px 12px',
                       borderRadius: '10px',
                       backgroundColor: 'var(--color-surface-container-lowest)',
-                      border: '1px solid var(--color-outline-variant)',
+                      border:
+                        editingPlaceId === pl.id
+                          ? '1.5px solid var(--color-primary)'
+                          : '1px solid var(--color-outline-variant)',
                     }}
                   >
-                    <div>
+                    <div style={{ minWidth: 0, flex: 1 }}>
                       <div style={{ fontWeight: 600, fontSize: '14px' }}>{pl.name}</div>
                       <div style={{ fontSize: '12px', color: 'var(--color-on-surface-variant)' }}>
                         Categoría: <strong>{pl.defaultCategory}</strong> •{' '}
@@ -871,13 +1223,38 @@ export function HouseholdConfigModal({
                           : ''}
                       </div>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => handleDeletePlace(pl.id)}
-                      style={{ color: 'var(--color-error)', padding: '6px' }}
-                    >
-                      <Trash2 size={16} />
-                    </button>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+                      <button
+                        type="button"
+                        onClick={() => startEditPlace(pl)}
+                        style={{
+                          padding: '6px 8px',
+                          color: 'var(--color-primary)',
+                          backgroundColor: 'var(--color-primary-container)',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                        }}
+                        title="Editar comercio"
+                      >
+                        <Pencil size={14} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeletePlace(pl.id)}
+                        style={{
+                          padding: '6px 8px',
+                          color: 'var(--color-error)',
+                          backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                        }}
+                        title="Eliminar comercio"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
                   </div>
                 ))
               )}
@@ -889,13 +1266,13 @@ export function HouseholdConfigModal({
         {/* TAB 4: FUENTES DE INGRESOS (RF-05)                                  */}
         {/* =================================================================== */}
         {activeTab === 'ingresos' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
             <p className="text-body-sm" style={{ color: 'var(--color-on-surface-variant)' }}>
               Registra tus fuentes de ingreso fijas (sueldo, arriendo) o variables (freelance, comisiones) para seleccionarlas en 1 toque cuando recibas dinero.
             </p>
 
             <form
-              onSubmit={handleAddIncomeSource}
+              onSubmit={handleSaveIncomeSource}
               style={{
                 display: 'flex',
                 flexDirection: 'column',
@@ -903,8 +1280,31 @@ export function HouseholdConfigModal({
                 padding: '12px',
                 borderRadius: '12px',
                 backgroundColor: 'var(--color-surface-container-low)',
+                border: editingIncId ? '1.5px solid var(--color-primary)' : 'none',
               }}
             >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span className="text-label-sm">
+                  {editingIncId ? 'Editando Fuente de Ingreso' : 'Nueva Fuente de Ingreso'}
+                </span>
+                {editingIncId && (
+                  <button
+                    type="button"
+                    onClick={resetIncomeSourceForm}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      fontSize: '11px',
+                      color: 'var(--color-error)',
+                      fontWeight: 600,
+                    }}
+                  >
+                    <X size={13} /> Cancelar edición
+                  </button>
+                )}
+              </div>
+
               <div style={{ display: 'grid', gridTemplateColumns: '1.3fr 1fr', gap: '8px' }}>
                 <Input
                   label="Nombre de la Fuente"
@@ -1009,7 +1409,7 @@ export function HouseholdConfigModal({
               </div>
 
               <Button type="submit" variant="primary" disabled={!incName.trim() || isSavingInc}>
-                + Guardar Fuente de Ingreso
+                {editingIncId ? 'Guardar Cambios de Fuente' : '+ Guardar Fuente de Ingreso'}
               </Button>
             </form>
 
@@ -1034,13 +1434,17 @@ export function HouseholdConfigModal({
                       display: 'flex',
                       justifyContent: 'space-between',
                       alignItems: 'center',
+                      gap: '8px',
                       padding: '10px 12px',
                       borderRadius: '10px',
                       backgroundColor: 'var(--color-surface-container-lowest)',
-                      border: '1px solid var(--color-outline-variant)',
+                      border:
+                        editingIncId === src.id
+                          ? '1.5px solid var(--color-primary)'
+                          : '1px solid var(--color-outline-variant)',
                     }}
                   >
-                    <div>
+                    <div style={{ minWidth: 0, flex: 1 }}>
                       <div style={{ fontWeight: 600, fontSize: '14px' }}>
                         {src.name}{' '}
                         {src.defaultAmount ? `(${formatCOP(src.defaultAmount)})` : ''}
@@ -1051,13 +1455,38 @@ export function HouseholdConfigModal({
                         {src.payDay ? ` • Día ${src.payDay}` : ''}
                       </div>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => handleDeleteIncomeSource(src.id)}
-                      style={{ color: 'var(--color-error)', padding: '6px' }}
-                    >
-                      <Trash2 size={16} />
-                    </button>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+                      <button
+                        type="button"
+                        onClick={() => startEditIncomeSource(src)}
+                        style={{
+                          padding: '6px 8px',
+                          color: 'var(--color-primary)',
+                          backgroundColor: 'var(--color-primary-container)',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                        }}
+                        title="Editar fuente de ingreso"
+                      >
+                        <Pencil size={14} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteIncomeSource(src.id)}
+                        style={{
+                          padding: '6px 8px',
+                          color: 'var(--color-error)',
+                          backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                        }}
+                        title="Eliminar fuente de ingreso"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
                   </div>
                 ))
               )}
