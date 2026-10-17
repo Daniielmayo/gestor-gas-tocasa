@@ -8,6 +8,7 @@ import { Spinner } from '@/components/ui/Spinner';
 import { ArrowLeft, Search, BellRing, AlertTriangle, Bell } from 'lucide-react';
 import styles from '../historial/historial.module.css';
 import { useAuth } from '@/context/AuthContext';
+import { useHousehold } from '@/context/HouseholdContext';
 import { db } from '@/lib/firebase';
 import { collection, query, where, onSnapshot, or } from 'firebase/firestore';
 
@@ -36,6 +37,7 @@ function getDaysUntil(targetDay: number): number {
 
 export default function Notificaciones() {
   const { user, loading } = useAuth();
+  const { household, partnerUid } = useHousehold();
   const router = useRouter();
   
   const [alerts, setAlerts] = useState<Alert[]>([]);
@@ -51,13 +53,17 @@ export default function Notificaciones() {
     if (!user) return;
 
     const paymentsRef = collection(db, 'recurringPayments');
-    const qPayments = query(
-      paymentsRef,
-      or(
-        where('ownerId', '==', user.uid),
-        where('sharedWith', 'array-contains', user.uid)
-      )
-    );
+    const clauses: any[] = [
+      where('ownerId', '==', user.uid),
+      where('sharedWith', 'array-contains', user.uid),
+    ];
+    if (partnerUid) {
+      clauses.push(where('ownerId', '==', partnerUid));
+    }
+    if (household?.id) {
+      clauses.push(where('householdId', '==', household.id));
+    }
+    const qPayments = query(paymentsRef, or(...clauses));
 
     const unsubPayments = onSnapshot(qPayments, (snapshot) => {
       const data: Payment[] = [];
@@ -90,7 +96,7 @@ export default function Notificaciones() {
     return () => {
       unsubPayments();
     };
-  }, [user]);
+  }, [user, partnerUid, household?.id]);
 
   if (loading || !user || !isReady) {
     return (

@@ -9,6 +9,7 @@ import {
   query,
   setDoc,
   updateDoc,
+  deleteDoc,
   where,
   or,
   arrayUnion,
@@ -28,10 +29,51 @@ import {
   DEFAULT_INCOME_CATEGORIES,
   DEFAULT_TAGS,
   SplitRule,
+  ThemeColor,
 } from '@/lib/models';
 import { useUsersMap, UserProfile } from '@/lib/hooks/useUsersMap';
 
 export type GlobalScopeFilter = 'mio' | 'conjunto' | 'pareja' | 'todo';
+
+export const THEME_COLOR_PALETTES: Record<
+  ThemeColor,
+  {
+    label: string;
+    primary: string;
+    primaryDark: string;
+    primaryContainer: string;
+    shadow: string;
+  }
+> = {
+  azul: {
+    label: 'Azul',
+    primary: '#3B82F6',
+    primaryDark: '#2563EB',
+    primaryContainer: '#EFF6FF',
+    shadow: '0px 8px 20px rgba(59, 130, 246, 0.25)',
+  },
+  morado: {
+    label: 'Morado',
+    primary: '#8B5CF6',
+    primaryDark: '#6D28D9',
+    primaryContainer: '#F5F3FF',
+    shadow: '0px 8px 20px rgba(139, 92, 246, 0.25)',
+  },
+  verde: {
+    label: 'Verde',
+    primary: '#10B981',
+    primaryDark: '#059669',
+    primaryContainer: '#ECFDF5',
+    shadow: '0px 8px 20px rgba(16, 185, 129, 0.25)',
+  },
+  amarillo: {
+    label: 'Amarillo',
+    primary: '#F59E0B',
+    primaryDark: '#D97706',
+    primaryContainer: '#FFFBEB',
+    shadow: '0px 8px 20px rgba(245, 158, 11, 0.25)',
+  },
+};
 
 interface HouseholdContextType {
   household: Household | null;
@@ -40,6 +82,8 @@ interface HouseholdContextType {
   memberIds: string[];
   globalScope: GlobalScopeFilter;
   setGlobalScope: (scope: GlobalScopeFilter) => void;
+  themeColor: ThemeColor;
+  setThemeColor: (color: ThemeColor) => Promise<void>;
   paymentMethods: PaymentMethod[];
   categories: CategoryDef[];
   tags: TagDef[];
@@ -49,6 +93,7 @@ interface HouseholdContextType {
   setLastUsedPaymentMethodId: (id: string) => void;
   linkPartnerByEmailOrCode: (emailOrCode: string) => Promise<{ ok: boolean; message: string }>;
   updateHouseholdConfig: (partial: Partial<Household>) => Promise<void>;
+  resetAllHouseholdDataExceptUsers: () => Promise<{ ok: boolean; deletedCount: number; message: string }>;
   loadingHousehold: boolean;
 }
 
@@ -59,6 +104,8 @@ const HouseholdContext = createContext<HouseholdContextType>({
   memberIds: [],
   globalScope: 'mio',
   setGlobalScope: () => {},
+  themeColor: 'azul',
+  setThemeColor: async () => {},
   paymentMethods: [],
   categories: [...DEFAULT_EXPENSE_CATEGORIES, ...DEFAULT_INCOME_CATEGORIES],
   tags: [],
@@ -68,6 +115,7 @@ const HouseholdContext = createContext<HouseholdContextType>({
   setLastUsedPaymentMethodId: () => {},
   linkPartnerByEmailOrCode: async () => ({ ok: false, message: '' }),
   updateHouseholdConfig: async () => {},
+  resetAllHouseholdDataExceptUsers: async () => ({ ok: false, deletedCount: 0, message: '' }),
   loadingHousehold: true,
 });
 
@@ -87,25 +135,74 @@ export function HouseholdProvider({ children }: { children: React.ReactNode }) {
   const [tags, setTags] = useState<TagDef[]>([]);
   const [knownPlaces, setKnownPlaces] = useState<KnownPlace[]>([]);
   const [incomeSources, setIncomeSources] = useState<IncomeSourceDef[]>([]);
-  const [globalScope, setGlobalScopeState] = useState<GlobalScopeFilter>('mio');
+  const [globalScope, setGlobalScopeState] = useState<GlobalScopeFilter>('todo');
+  const [themeColor, setThemeColorState] = useState<ThemeColor>('azul');
   const [lastUsedPaymentMethodId, setLastUsedPaymentMethodIdState] = useState<string>('');
   const [loadingHousehold, setLoadingHousehold] = useState<boolean>(true);
 
+  const applyThemePaletteToDOM = (color: ThemeColor) => {
+    if (typeof document === 'undefined') return;
+    const pal = THEME_COLOR_PALETTES[color] || THEME_COLOR_PALETTES.azul;
+    const root = document.documentElement;
+    root.style.setProperty('--color-primary', pal.primary);
+    root.style.setProperty('--color-primary-dark', pal.primaryDark);
+    root.style.setProperty('--color-primary-container', pal.primaryContainer);
+    root.style.setProperty('--shadow-level-2', pal.shadow);
+  };
+
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      const savedScope = localStorage.getItem('gastos_global_scope') as GlobalScopeFilter | null;
+      const savedScope = localStorage.getItem('gastos_global_scope_v2') as GlobalScopeFilter | null;
       if (savedScope && ['mio', 'conjunto', 'pareja', 'todo'].includes(savedScope)) {
         setGlobalScopeState(savedScope);
+      } else {
+        setGlobalScopeState('todo');
+      }
+      const savedTheme = localStorage.getItem('gastos_theme_color') as ThemeColor | null;
+      if (savedTheme && ['azul', 'morado', 'verde', 'amarillo'].includes(savedTheme)) {
+        setThemeColorState(savedTheme);
+        applyThemePaletteToDOM(savedTheme);
       }
       const savedPm = localStorage.getItem('gastos_last_pm');
       if (savedPm) setLastUsedPaymentMethodIdState(savedPm);
     }
   }, []);
 
+  useEffect(() => {
+    if (household?.themeColor && ['azul', 'morado', 'verde', 'amarillo'].includes(household.themeColor)) {
+      const savedLocal =
+        typeof window !== 'undefined'
+          ? (localStorage.getItem('gastos_theme_color') as ThemeColor | null)
+          : null;
+      if (!savedLocal) {
+        setThemeColorState(household.themeColor);
+        applyThemePaletteToDOM(household.themeColor);
+      }
+    }
+  }, [household?.themeColor]);
+
+  const setThemeColor = async (color: ThemeColor) => {
+    setThemeColorState(color);
+    applyThemePaletteToDOM(color);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('gastos_theme_color', color);
+    }
+    if (household?.id) {
+      try {
+        await updateDoc(doc(db, 'households', household.id), {
+          themeColor: color,
+          updatedAt: serverTimestamp(),
+        });
+      } catch (e) {
+        // ignore
+      }
+    }
+  };
+
   const setGlobalScope = (scope: GlobalScopeFilter) => {
     setGlobalScopeState(scope);
     if (typeof window !== 'undefined') {
-      localStorage.setItem('gastos_global_scope', scope);
+      localStorage.setItem('gastos_global_scope_v2', scope);
     }
   };
 
@@ -116,7 +213,7 @@ export function HouseholdProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  // 1. Bootstrap or subscribe to Household + automatic non-destructive backfill
+  // 1. Bootstrap or subscribe to Household + automatic non-destructive backfill & household deduplication
   useEffect(() => {
     if (!user) {
       setHousehold(null);
@@ -132,28 +229,55 @@ export function HouseholdProvider({ children }: { children: React.ReactNode }) {
         const qHh = query(hhRef, where('memberIds', 'array-contains', user.uid));
         const snap = await getDocs(qHh);
 
+        // Also check legacy financeSettings / paymentsSettings for any linked partner
+        const discoveredMembers = new Set<string>([user.uid]);
+        try {
+          const finSetSnap = await getDoc(doc(db, 'financeSettings', user.uid));
+          if (finSetSnap.exists()) {
+            const sw = finSetSnap.data().sharedWith || [];
+            sw.forEach((id: string) => id && discoveredMembers.add(id));
+          }
+          const paySetSnap = await getDoc(doc(db, 'paymentsSettings', user.uid));
+          if (paySetSnap.exists()) {
+            const sw = paySetSnap.data().sharedWith || [];
+            sw.forEach((id: string) => id && discoveredMembers.add(id));
+          }
+        } catch (e) {
+          // ignore
+        }
+
         let targetHouseholdId = '';
 
         if (!snap.empty) {
-          targetHouseholdId = snap.docs[0].id;
-        } else {
-          // Discover existing partner from legacy financeSettings or paymentsSettings
-          const discoveredMembers = new Set<string>([user.uid]);
-          try {
-            const finSetSnap = await getDoc(doc(db, 'financeSettings', user.uid));
-            if (finSetSnap.exists()) {
-              const sw = finSetSnap.data().sharedWith || [];
-              sw.forEach((id: string) => discoveredMembers.add(id));
-            }
-            const paySetSnap = await getDoc(doc(db, 'paymentsSettings', user.uid));
-            if (paySetSnap.exists()) {
-              const sw = paySetSnap.data().sharedWith || [];
-              sw.forEach((id: string) => discoveredMembers.add(id));
-            }
-          } catch (e) {
-            // ignore
+          // Prefer a household that already has >1 member (shared with partner)
+          const docs = snap.docs;
+          docs.forEach((d) => {
+            const mIds: string[] = d.data().memberIds || [];
+            mIds.forEach((id) => id && discoveredMembers.add(id));
+          });
+
+          const sharedDoc = docs.find((d) => (d.data().memberIds || []).length > 1) || docs[0];
+          targetHouseholdId = sharedDoc.id;
+
+          const allMembers = Array.from(discoveredMembers);
+          const currentMembers: string[] = sharedDoc.data().memberIds || [];
+          if (allMembers.some((m) => !currentMembers.includes(m))) {
+            await updateDoc(doc(db, 'households', targetHouseholdId), {
+              memberIds: arrayUnion(...allMembers),
+            });
           }
 
+          // Remove any duplicate solo household documents so both partners always resolve to the same household
+          for (const d of docs) {
+            if (d.id !== targetHouseholdId) {
+              try {
+                await deleteDoc(doc(db, 'households', d.id));
+              } catch (e) {
+                // ignore
+              }
+            }
+          }
+        } else {
           // Check if discovered partner already created a household
           const memberArray = Array.from(discoveredMembers);
           const partnerCandidate = memberArray.find((id) => id !== user.uid);
@@ -163,7 +287,7 @@ export function HouseholdProvider({ children }: { children: React.ReactNode }) {
             if (!pSnap.empty) {
               targetHouseholdId = pSnap.docs[0].id;
               await updateDoc(doc(db, 'households', targetHouseholdId), {
-                memberIds: arrayUnion(user.uid),
+                memberIds: arrayUnion(...memberArray),
               });
             }
           }
@@ -369,6 +493,8 @@ export function HouseholdProvider({ children }: { children: React.ReactNode }) {
         'tags',
         'places',
         'incomeSources',
+        'lists',
+        'history',
       ];
 
       for (const colName of ownerCollections) {
@@ -520,7 +646,23 @@ export function HouseholdProvider({ children }: { children: React.ReactNode }) {
         updatedAt: serverTimestamp(),
       });
 
-      // Keep legacy financeSettings & paymentsSettings synchronized for backward compatibility
+      // Also remove or merge any separate solo household belonging to friendUid so both share a single householdId
+      try {
+        const qFriendHh = query(
+          collection(db, 'households'),
+          where('memberIds', 'array-contains', friendUid)
+        );
+        const fHhSnap = await getDocs(qFriendHh);
+        for (const fDoc of fHhSnap.docs) {
+          if (fDoc.id !== household.id) {
+            await deleteDoc(doc(db, 'households', fDoc.id));
+          }
+        }
+      } catch (e) {
+        // ignore
+      }
+
+      // Keep legacy financeSettings & paymentsSettings synchronized for BOTH users
       await setDoc(
         doc(db, 'financeSettings', user.uid),
         { sharedWith: arrayUnion(friendUid) },
@@ -531,8 +673,22 @@ export function HouseholdProvider({ children }: { children: React.ReactNode }) {
         { sharedWith: arrayUnion(friendUid) },
         { merge: true }
       );
+      try {
+        await setDoc(
+          doc(db, 'financeSettings', friendUid),
+          { sharedWith: arrayUnion(user.uid) },
+          { merge: true }
+        );
+        await setDoc(
+          doc(db, 'paymentsSettings', friendUid),
+          { sharedWith: arrayUnion(user.uid) },
+          { merge: true }
+        );
+      } catch (e) {
+        // ignore if rules restrict writing partner's legacy settings doc
+      }
 
-      // Backfill existing user financial documents so partner can see them across all tabs (Mío / Pareja / Conjunto / Todo)
+      // Backfill existing user financial & list documents so partner can see them across all views
       const collectionsToShare = [
         'paymentMethods',
         'transactions',
@@ -544,6 +700,8 @@ export function HouseholdProvider({ children }: { children: React.ReactNode }) {
         'tags',
         'places',
         'incomeSources',
+        'lists',
+        'history',
       ];
 
       for (const colName of collectionsToShare) {
@@ -552,9 +710,10 @@ export function HouseholdProvider({ children }: { children: React.ReactNode }) {
           const ownedSnap = await getDocs(qOwned);
           for (const dSnap of ownedSnap.docs) {
             const sw: string[] = dSnap.data().sharedWith || [];
-            if (!sw.includes(friendUid)) {
+            if (!sw.includes(friendUid) || dSnap.data().householdId !== household.id) {
               await updateDoc(doc(db, colName, dSnap.id), {
                 sharedWith: arrayUnion(friendUid),
+                householdId: household.id,
               });
             }
           }
@@ -596,6 +755,77 @@ export function HouseholdProvider({ children }: { children: React.ReactNode }) {
     });
   };
 
+  const resetAllHouseholdDataExceptUsers = async (): Promise<{
+    ok: boolean;
+    deletedCount: number;
+    message: string;
+  }> => {
+    if (!user) {
+      return { ok: false, deletedCount: 0, message: 'No hay usuario autenticado.' };
+    }
+
+    // All collections that store operational/financial/list data.
+    // Explicitly EXCLUDES 'users', 'households', 'financeSettings', and 'paymentsSettings'
+    // so user profiles and household partner links remain intact.
+    const collectionsToClear = [
+      'transactions',
+      'debts',
+      'recurringPayments',
+      'savings',
+      'budgets',
+      'settlements',
+      'periodWorksheets',
+      'paymentMethods',
+      'financeCategories',
+      'tags',
+      'places',
+      'incomeSources',
+      'lists',
+      'listItems',
+      'notifications',
+      'history',
+    ];
+
+    let deletedCount = 0;
+
+    try {
+      for (const colName of collectionsToClear) {
+        try {
+          const snap = await getDocs(collection(db, colName));
+          const deletePromises = snap.docs.map(async (dSnap) => {
+            try {
+              await deleteDoc(doc(db, colName, dSnap.id));
+              deletedCount += 1;
+            } catch (err) {
+              // Ignore individual doc permission errors if any
+            }
+          });
+          await Promise.all(deletePromises);
+        } catch (err) {
+          console.warn(`Error limpiando colección ${colName}:`, err);
+        }
+      }
+
+      if (typeof window !== 'undefined') {
+        localStorage.removeItem('gastos_last_pm');
+      }
+      setLastUsedPaymentMethodIdState('');
+
+      return {
+        ok: true,
+        deletedCount,
+        message: `Se eliminaron ${deletedCount} registros exitosamente. Los usuarios y el vínculo del hogar se mantuvieron intactos.`,
+      };
+    } catch (e: any) {
+      console.error('Error al reiniciar datos:', e);
+      return {
+        ok: false,
+        deletedCount,
+        message: 'Ocurrió un error al limpiar algunos datos.',
+      };
+    }
+  };
+
   return (
     <HouseholdContext.Provider
       value={{
@@ -605,6 +835,8 @@ export function HouseholdProvider({ children }: { children: React.ReactNode }) {
         memberIds,
         globalScope,
         setGlobalScope,
+        themeColor,
+        setThemeColor,
         paymentMethods,
         categories,
         tags: mergedTags,
@@ -614,6 +846,7 @@ export function HouseholdProvider({ children }: { children: React.ReactNode }) {
         setLastUsedPaymentMethodId,
         linkPartnerByEmailOrCode,
         updateHouseholdConfig,
+        resetAllHouseholdDataExceptUsers,
         loadingHousehold,
       }}
     >

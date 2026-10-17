@@ -8,8 +8,9 @@ import { Spinner } from '@/components/ui/Spinner';
 import { ArrowLeft, Search } from 'lucide-react';
 import styles from './historial.module.css';
 import { useAuth } from '@/context/AuthContext';
+import { useHousehold } from '@/context/HouseholdContext';
 import { db } from '@/lib/firebase';
-import { collection, query, where, onSnapshot, orderBy, or } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, or } from 'firebase/firestore';
 
 interface HistoryLog {
   id: string;
@@ -22,6 +23,7 @@ interface HistoryLog {
 
 export default function Historial() {
   const { user, loading } = useAuth();
+  const { household, partnerUid } = useHousehold();
   const router = useRouter();
   
   const [logs, setLogs] = useState<HistoryLog[]>([]);
@@ -38,19 +40,27 @@ export default function Historial() {
 
     // 1. Suscribirse al Historial
     const logsRef = collection(db, 'history');
-    const qLogs = query(
-      logsRef,
-      or(
-        where('ownerId', '==', user.uid),
-        where('sharedWith', 'array-contains', user.uid)
-      ),
-      orderBy('createdAt', 'desc')
-    );
+    const clauses: any[] = [
+      where('ownerId', '==', user.uid),
+      where('sharedWith', 'array-contains', user.uid),
+    ];
+    if (partnerUid) {
+      clauses.push(where('ownerId', '==', partnerUid));
+    }
+    if (household?.id) {
+      clauses.push(where('householdId', '==', household.id));
+    }
+    const qLogs = query(logsRef, or(...clauses));
 
     const unsubLogs = onSnapshot(qLogs, (snapshot) => {
       const data: HistoryLog[] = [];
       snapshot.forEach(doc => {
         data.push({ id: doc.id, ...doc.data() } as HistoryLog);
+      });
+      data.sort((a, b) => {
+        const timeA = a.createdAt?.toMillis ? a.createdAt.toMillis() : 0;
+        const timeB = b.createdAt?.toMillis ? b.createdAt.toMillis() : 0;
+        return timeB - timeA;
       });
       setLogs(data);
       setIsReady(true);
@@ -59,7 +69,7 @@ export default function Historial() {
     return () => {
       unsubLogs();
     };
-  }, [user]);
+  }, [user, partnerUid, household?.id]);
 
   if (loading || !user || !isReady) {
     return (

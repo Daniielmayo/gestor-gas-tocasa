@@ -12,6 +12,7 @@ import { ListSummaryCard } from '@/components/ui/ListSummaryCard';
 import { ArrowLeft, Plus, Search } from 'lucide-react';
 import styles from './listas.module.css';
 import { useAuth } from '@/context/AuthContext';
+import { useHousehold } from '@/context/HouseholdContext';
 import { db } from '@/lib/firebase';
 import { collection, query, where, onSnapshot, addDoc, serverTimestamp, or, getDocs, Timestamp } from 'firebase/firestore';
 import { UserEmailAutocomplete } from '@/components/ui/UserEmailAutocomplete';
@@ -24,6 +25,7 @@ interface SharedList {
 
 export default function Listas() {
   const { user, profile, loading } = useAuth();
+  const { household, partnerUid } = useHousehold();
   const router = useRouter();
   
   const [lists, setLists] = useState<SharedList[]>([]);
@@ -44,13 +46,17 @@ export default function Listas() {
     if (!user) return;
 
     const listsRef = collection(db, 'lists');
-    const qLists = query(
-      listsRef, 
-      or(
-        where('ownerId', '==', user.uid),
-        where('sharedWith', 'array-contains', user.uid)
-      )
-    );
+    const clauses: any[] = [
+      where('ownerId', '==', user.uid),
+      where('sharedWith', 'array-contains', user.uid),
+    ];
+    if (partnerUid) {
+      clauses.push(where('ownerId', '==', partnerUid));
+    }
+    if (household?.id) {
+      clauses.push(where('householdId', '==', household.id));
+    }
+    const qLists = query(listsRef, or(...clauses));
 
     const unsubLists = onSnapshot(qLists, (snapshot) => {
       const data: any[] = [];
@@ -69,7 +75,7 @@ export default function Listas() {
     });
 
     return () => unsubLists();
-  }, [user]);
+  }, [user, partnerUid, household?.id]);
 
   const handleCreateList = async (e?: FormEvent) => {
     if (e) e.preventDefault();
@@ -79,8 +85,7 @@ export default function Listas() {
     setIsCreatingList(true);
 
     try {
-      let sharedWithUids: string[] = [];
-      let friendName = '';
+      let sharedWithUids: string[] = partnerUid ? [partnerUid] : [];
       
       if (shareEmail.trim()) {
         const usersRef = collection(db, 'users');
@@ -90,17 +95,17 @@ export default function Listas() {
           const friendDoc = snap.docs[0];
           const friendUid = friendDoc.data().uid;
           if (friendUid !== user.uid) {
-            sharedWithUids = [friendUid];
-            friendName = friendDoc.data().displayName || shareEmail;
+            sharedWithUids = Array.from(new Set([...sharedWithUids, friendUid]));
           }
         } else {
-          alert("El correo a compartir no está registrado. La lista se creará sin compartir.");
+          alert("El correo a compartir no está registrado. La lista se creará sin compartir con ese correo.");
         }
       }
 
       const docRef = await addDoc(collection(db, 'lists'), {
         title: newListName.trim(),
         ownerId: user.uid,
+        householdId: household?.id || '',
         sharedWith: sharedWithUids,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()

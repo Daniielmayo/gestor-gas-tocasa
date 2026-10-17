@@ -34,7 +34,7 @@
   background: linear-gradient(135deg, var(--color-primary), var(--color-primary-dark));
   color: #FFFFFF;
   border: none;
-  box-shadow: 0 12px 24px rgba(59, 130, 246, 0.25);
+  box-shadow: var(--shadow-level-2);
 }
 
 .balanceHeader {

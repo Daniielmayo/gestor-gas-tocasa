@@ -4,7 +4,7 @@ import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { useAuth } from '@/context/AuthContext';
-import { useHousehold } from '@/context/HouseholdContext';
+import { useHousehold, THEME_COLOR_PALETTES } from '@/context/HouseholdContext';
 import { db } from '@/lib/firebase';
 import {
   collection,
@@ -26,6 +26,7 @@ import {
   SplitRule,
   IncomeFrequency,
   Scope,
+  ThemeColor,
 } from '@/lib/models';
 import { formatCOP, formatInputCOP, parseCOP } from '@/lib/currency';
 import {
@@ -65,6 +66,8 @@ export function HouseholdConfigModal({
     tags,
     knownPlaces,
     incomeSources,
+    themeColor,
+    setThemeColor,
     linkPartnerByEmailOrCode,
     updateHouseholdConfig,
   } = useHousehold();
@@ -1562,6 +1565,65 @@ export function HouseholdConfigModal({
                 gap: '12px',
               }}
             >
+              <div>
+                <label className="text-label-sm" style={{ display: 'block', marginBottom: '8px' }}>
+                  🎨 Color del Layout (Tema)
+                </label>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px' }}>
+                  {(Object.keys(THEME_COLOR_PALETTES) as ThemeColor[]).map((colorKey) => {
+                    const palette = THEME_COLOR_PALETTES[colorKey];
+                    const isSelected = themeColor === colorKey;
+                    return (
+                      <button
+                        key={colorKey}
+                        type="button"
+                        onClick={() => setThemeColor(colorKey)}
+                        style={{
+                          display: 'flex',
+                          flexDirection: 'column',
+                          alignItems: 'center',
+                          gap: '6px',
+                          padding: '8px 4px',
+                          borderRadius: '14px',
+                          border: isSelected
+                            ? `2px solid ${palette.primary}`
+                            : '1px solid var(--color-outline-variant)',
+                          backgroundColor: isSelected
+                            ? palette.primaryContainer
+                            : 'var(--color-surface-container-lowest)',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        <span
+                          style={{
+                            width: '22px',
+                            height: '22px',
+                            borderRadius: '50%',
+                            background: `linear-gradient(135deg, ${palette.primary}, ${palette.primaryDark})`,
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            color: '#fff',
+                            boxShadow: '0 2px 6px rgba(0,0,0,0.15)',
+                          }}
+                        >
+                          {isSelected && <Check size={13} />}
+                        </span>
+                        <span
+                          style={{
+                            fontSize: '11px',
+                            fontWeight: isSelected ? 700 : 500,
+                            color: isSelected ? palette.primaryDark : 'var(--color-on-surface)',
+                          }}
+                        >
+                          {palette.label}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
               <div>
                 <label className="text-label-sm" style={{ display: 'block', marginBottom: '6px' }}>
                   Regla de reparto para gastos conjuntos (Balance de pareja)

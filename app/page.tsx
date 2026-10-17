@@ -36,10 +36,11 @@ import {
   Tag,
   ChevronLeft,
   ChevronRight,
+  Trash2,
 } from 'lucide-react';
 import styles from './dashboard.module.css';
 import { useAuth } from '@/context/AuthContext';
-import { useHousehold } from '@/context/HouseholdContext';
+import { useHousehold, THEME_COLOR_PALETTES } from '@/context/HouseholdContext';
 import { db } from '@/lib/firebase';
 import {
   collection,
@@ -55,7 +56,7 @@ import {
   increment,
 } from 'firebase/firestore';
 import { formatCOP } from '@/lib/currency';
-import { BudgetDoc, DebtDoc, EnhancedTransaction, Scope, SettlementDoc } from '@/lib/models';
+import { BudgetDoc, DebtDoc, EnhancedTransaction, Scope, SettlementDoc, ThemeColor } from '@/lib/models';
 import { evaluateBudgetStatus, getPeriodKey, TriggeredBudgetAlert } from '@/lib/budgetEngine';
 import { calculatePartnerBalance } from '@/lib/balanceEngine';
 
@@ -70,7 +71,16 @@ function getDaysUntil(targetDay: number): number {
 
 export default function Dashboard() {
   const { user, profile, loading, logout } = useAuth();
-  const { household, partner, partnerUid, globalScope, categories } = useHousehold();
+  const {
+    household,
+    partner,
+    partnerUid,
+    globalScope,
+    categories,
+    themeColor,
+    setThemeColor,
+    resetAllHouseholdDataExceptUsers,
+  } = useHousehold();
   const router = useRouter();
 
   const [lists, setLists] = useState<any[]>([]);
@@ -96,6 +106,7 @@ export default function Dashboard() {
   const [newListName, setNewListName] = useState('');
   const [shareEmail, setShareEmail] = useState('');
   const [isCreatingList, setIsCreatingList] = useState(false);
+  const [isResettingData, setIsResettingData] = useState(false);
 
   const [isQuickModalOpen, setIsQuickModalOpen] = useState(false);
   const [quickModalType, setQuickModalType] = useState<'expense' | 'income'>('expense');
@@ -128,6 +139,21 @@ export default function Dashboard() {
     if (user) {
       requestAndSaveNotificationPermission(user.uid);
     }
+  }, [user]);
+
+  // One-time automatic database clean (preserving users and household links)
+  useEffect(() => {
+    if (!user || typeof window === 'undefined') return;
+    const flagKey = 'gastos_db_clean_20261017_v1';
+    if (localStorage.getItem(flagKey) === 'done') return;
+
+    localStorage.setItem(flagKey, 'done');
+    resetAllHouseholdDataExceptUsers().then((res) => {
+      if (res.ok && res.deletedCount > 0) {
+        setSuccessModalMessage(res.message);
+        setIsSuccessModalOpen(true);
+      }
+    });
   }, [user]);
 
   useEffect(() => {
@@ -519,9 +545,10 @@ export default function Dashboard() {
         pct: totalExpenses > 0 ? Math.min(100, Math.round((info.amount / totalExpenses) * 100)) : 0,
         color: info.color || palette[idx % palette.length],
       }))
-      .sort((a, b) => b.amount - a.amount);
+      .sort((a, b) => b.amount - a.amount)
+      .slice(0, 5);
 
-    // Build CSS conic-gradient for the donut chart
+    // Build CSS conic-gradient for the donut chart from the top 5 items
     let currentDeg = 0;
     const stops: string[] = [];
     const totalSliceSum = sorted.reduce((acc, item) => acc + item.amount, 0);
@@ -1064,9 +1091,9 @@ export default function Dashboard() {
               </div>
             </div>
 
-            {/* Barras y ranking de Categorías / Tags */}
+            {/* Barras y ranking de Categorías / Tags (Top 5 de mayor a menor) */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', minWidth: 0 }}>
-              {chartData.items.slice(0, 6).map((item) => (
+              {chartData.items.slice(0, 5).map((item, idx) => (
                 <div key={item.label} style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
                   <div
                     style={{
@@ -1099,7 +1126,7 @@ export default function Dashboard() {
                         }}
                       />
                       <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                        {item.label}
+                        {idx + 1}. {item.label}
                       </span>
                     </span>
                     <span
@@ -1326,7 +1353,7 @@ export default function Dashboard() {
         onClose={() => setIsProfileModalOpen(false)}
         title="Tu Perfil y Hogar"
       >
-        <div style={{ textAlign: 'center', marginBottom: '20px' }}>
+        <div style={{ textAlign: 'center', marginBottom: '16px' }}>
           <Avatar
             src={profile?.photoURL || undefined}
             initials={profile?.initials || 'US'}
@@ -1340,6 +1367,83 @@ export default function Dashboard() {
             {profile?.email}
           </p>
         </div>
+
+        {/* Selector de Color del Layout */}
+        <div
+          style={{
+            padding: '12px',
+            borderRadius: '14px',
+            backgroundColor: 'var(--color-surface-container-low)',
+            border: '1px solid var(--color-outline-variant)',
+            marginBottom: '16px',
+          }}
+        >
+          <p
+            className="text-label-sm"
+            style={{
+              fontWeight: 700,
+              marginBottom: '10px',
+              color: 'var(--color-on-surface)',
+              textAlign: 'center',
+            }}
+          >
+            🎨 Color del Tema (Layout)
+          </p>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px' }}>
+            {(Object.keys(THEME_COLOR_PALETTES) as ThemeColor[]).map((colorKey) => {
+              const palette = THEME_COLOR_PALETTES[colorKey];
+              const isSelected = themeColor === colorKey;
+              return (
+                <button
+                  key={colorKey}
+                  type="button"
+                  onClick={() => setThemeColor(colorKey)}
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    gap: '6px',
+                    padding: '8px 4px',
+                    borderRadius: '12px',
+                    border: isSelected
+                      ? `2px solid ${palette.primary}`
+                      : '1px solid var(--color-outline-variant)',
+                    backgroundColor: isSelected
+                      ? palette.primaryContainer
+                      : 'var(--color-surface-container-lowest)',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <span
+                    style={{
+                      width: '22px',
+                      height: '22px',
+                      borderRadius: '50%',
+                      background: `linear-gradient(135deg, ${palette.primary}, ${palette.primaryDark})`,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      color: '#fff',
+                      boxShadow: '0 2px 6px rgba(0,0,0,0.15)',
+                    }}
+                  >
+                    {isSelected && <Check size={13} />}
+                  </span>
+                  <span
+                    style={{
+                      fontSize: '11px',
+                      fontWeight: isSelected ? 700 : 500,
+                      color: isSelected ? palette.primaryDark : 'var(--color-on-surface)',
+                    }}
+                  >
+                    {palette.label}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
           <Button
             variant="secondary"
@@ -1350,6 +1454,35 @@ export default function Dashboard() {
             }}
           >
             Configurar Hogar, Pareja y Tarjetas
+          </Button>
+          <Button
+            variant="secondary"
+            fullWidth
+            disabled={isResettingData}
+            onClick={async () => {
+              if (
+                !window.confirm(
+                  '¿Seguro que deseas eliminar TODOS los movimientos, metas, deudas, listas y catálogos? Los usuarios y el vínculo del hogar NO se borrarán.'
+                )
+              ) {
+                return;
+              }
+              setIsResettingData(true);
+              const res = await resetAllHouseholdDataExceptUsers();
+              setIsResettingData(false);
+              setIsProfileModalOpen(false);
+              setSuccessModalMessage(res.message);
+              setIsSuccessModalOpen(true);
+            }}
+            style={{
+              color: 'var(--color-error)',
+              borderColor: 'rgba(239, 68, 68, 0.3)',
+            }}
+          >
+            <Trash2 size={16} />{' '}
+            {isResettingData
+              ? 'Limpiando base de datos...'
+              : 'Limpiar todos los datos (Conservar Usuarios)'}
           </Button>
           <Button
             variant="danger"

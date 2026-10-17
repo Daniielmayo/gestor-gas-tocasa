@@ -4,6 +4,7 @@ export type PaymentMethodType = 'credito' | 'debito' | 'efectivo' | 'transferenc
 export type PeriodType = 'mensual' | 'quincenal';
 export type QuincenaHalf = 1 | 2;
 export type IncomeFrequency = 'mensual' | 'quincenal' | 'unico';
+export type ThemeColor = 'azul' | 'morado' | 'verde' | 'amarillo';
 
 export interface Household {
   id: string;
@@ -14,6 +15,7 @@ export interface Household {
   memberIds: string[];
   inviteCode: string;
   personalVisibility: 'totals_only' | 'full_detail';
+  themeColor?: ThemeColor;
   disabledDefaultCategoryIds?: string[];
   disabledDefaultTagIds?: string[];
   createdAt?: any;
