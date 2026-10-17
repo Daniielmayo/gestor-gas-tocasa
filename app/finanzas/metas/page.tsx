@@ -55,6 +55,7 @@ interface ContributionItem {
 
 interface SavingGoal {
   id: string;
+  householdId?: string;
   title: string;
   targetAmount: number;
   currentAmount: number;
@@ -68,7 +69,7 @@ interface SavingGoal {
 
 export default function MetasAhorro() {
   const { user, profile, loading } = useAuth();
-  const { household, partner, partnerUid, globalScope } = useHousehold();
+  const { household, partner, partnerUid, globalScope, paymentMethods } = useHousehold();
   const router = useRouter();
   const { usersMap } = useUsersMap();
 
@@ -79,14 +80,17 @@ export default function MetasAhorro() {
   const [isNewSavingModalOpen, setIsNewSavingModalOpen] = useState(false);
   const [savingTitle, setSavingTitle] = useState('');
   const [savingTarget, setSavingTarget] = useState('');
+  const [savingInitialAmount, setSavingInitialAmount] = useState('');
   const [savingTargetDate, setSavingTargetDate] = useState('');
   const [savingScope, setSavingScope] = useState<Scope>('conjunto');
+  const [savingPaymentMethodId, setSavingPaymentMethodId] = useState('');
 
   const [isContributeModalOpen, setIsContributeModalOpen] = useState(false);
   const [selectedSaving, setSelectedSaving] = useState<SavingGoal | null>(null);
   const [contributeType, setContributeType] = useState<'add' | 'withdraw'>('add');
   const [contributeAmount, setContributeAmount] = useState('');
   const [contributorUid, setContributorUid] = useState('');
+  const [contributePaymentMethodId, setContributePaymentMethodId] = useState('');
 
   const [isDeleteSavingModalOpen, setIsDeleteSavingModalOpen] = useState(false);
   const [savingToDelete, setSavingToDelete] = useState<SavingGoal | null>(null);
@@ -141,24 +145,66 @@ export default function MetasAhorro() {
     setIsSubmitting(true);
     try {
       const sharedArray = partnerUid ? [partnerUid] : [];
-      await addDoc(collection(db, 'savings'), {
+      const initAmt = parseCOP(savingInitialAmount || '0');
+      const targetAmt = parseCOP(savingTarget);
+      const isCompleted = initAmt >= targetAmt && targetAmt > 0;
+
+      const contributionsList: ContributionItem[] = [];
+      if (initAmt > 0) {
+        contributionsList.push({
+          id: `c_${Date.now()}`,
+          userId: user.uid,
+          userName: profile?.displayName?.split(' ')[0] || 'Yo',
+          amount: initAmt,
+          type: 'add',
+          dateIso: new Date().toISOString(),
+        });
+      }
+
+      const savingDocRef = await addDoc(collection(db, 'savings'), {
         householdId: household?.id || 'default',
         title: savingTitle.trim(),
-        targetAmount: parseCOP(savingTarget),
-        currentAmount: 0,
+        targetAmount: targetAmt,
+        currentAmount: initAmt,
         scope: savingScope,
         targetDate: savingTargetDate || null,
-        status: 'activa',
-        contributions: [],
+        status: isCompleted ? 'completada' : 'activa',
+        contributions: contributionsList,
         ownerId: user.uid,
         sharedWith: sharedArray,
         createdAt: Timestamp.now(),
       });
+
+      // If created with an initial amount, immediately deduct it from general balance as an expense/pocket
+      if (initAmt > 0) {
+        await addDoc(collection(db, 'transactions'), {
+          type: 'expense',
+          amount: initAmt,
+          category: 'Ahorro / Meta',
+          place: `Bolsillo: ${savingTitle.trim()}`,
+          description: `Aporte inicial a meta: ${savingTitle.trim()}`,
+          title: `Meta: ${savingTitle.trim()}`,
+          scope: savingScope,
+          paidByUserId: user.uid,
+          paidByName: profile?.displayName?.split(' ')[0] || 'Yo',
+          paymentMethodId: savingPaymentMethodId || null,
+          householdId: household?.id || '',
+          tags: ['ahorro', 'bolsillo'],
+          ownerId: user.uid,
+          ownerName: profile?.displayName?.split(' ')[0] || 'Usuario',
+          sharedWith: sharedArray,
+          deletedAt: null,
+          createdAt: Timestamp.now(),
+        });
+      }
+
       setIsNewSavingModalOpen(false);
       setSavingTitle('');
       setSavingTarget('');
+      setSavingInitialAmount('');
       setSavingTargetDate('');
       setSavingScope('conjunto');
+      setSavingPaymentMethodId('');
     } catch (error) {
       console.error(error);
     } finally {
@@ -202,26 +248,32 @@ export default function MetasAhorro() {
         selectedSaving.scope ||
         (selectedSaving.sharedWith && selectedSaving.sharedWith.length > 0 ? 'conjunto' : 'personal');
 
+      const sharedArray = partnerUid ? [partnerUid] : [];
+
+      // Aporte descontando del saldo general (expense) o Retiro reintegrando al saldo general (income)
       await addDoc(collection(db, 'transactions'), {
         type: isAdd ? 'expense' : 'income',
         amount: amt,
         category: 'Ahorro / Meta',
-        place: `Meta: ${selectedSaving.title}`,
-        description: `${isAdd ? 'Aporte a meta' : 'Retiro de meta'}: ${selectedSaving.title}`,
+        place: `Bolsillo: ${selectedSaving.title}`,
+        description: `${isAdd ? 'Aporte a bolsillo de ahorro' : 'Retiro de bolsillo de ahorro'}: ${selectedSaving.title}`,
         title: `Meta: ${selectedSaving.title}`,
         scope: goalScope,
         paidByUserId: chosenUid,
         paidByName: chosenName,
-        tags: ['ahorro'],
+        paymentMethodId: contributePaymentMethodId || null,
+        householdId: household?.id || selectedSaving.householdId || '',
+        tags: ['ahorro', 'bolsillo'],
         ownerId: user.uid,
         ownerName: profile?.displayName?.split(' ')[0] || 'Usuario',
-        sharedWith: partnerUid ? [partnerUid] : [],
+        sharedWith: sharedArray,
         deletedAt: null,
         createdAt: Timestamp.now(),
       });
 
       setIsContributeModalOpen(false);
       setContributeAmount('');
+      setContributePaymentMethodId('');
       setSelectedSaving(null);
     } catch (error) {
       console.error(error);
@@ -580,15 +632,52 @@ export default function MetasAhorro() {
             placeholder="Ej: Viaje a Europa, Fondo de Emergencia"
             required
           />
-          <Input
-            label="Monto objetivo ($)"
-            type="text"
-            inputMode="numeric"
-            value={savingTarget}
-            onChange={(e) => setSavingTarget(formatInputCOP(e.target.value))}
-            placeholder="Ej. 5.000.000"
-            required
-          />
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+            <Input
+              label="Monto objetivo ($)"
+              type="text"
+              inputMode="numeric"
+              value={savingTarget}
+              onChange={(e) => setSavingTarget(formatInputCOP(e.target.value))}
+              placeholder="Ej. 5.000.000"
+              required
+            />
+            <Input
+              label="Aporte inicial (Bolsillo)"
+              type="text"
+              inputMode="numeric"
+              value={savingInitialAmount}
+              onChange={(e) => setSavingInitialAmount(formatInputCOP(e.target.value))}
+              placeholder="Ej. 100.000 (Opcional)"
+            />
+          </div>
+
+          {paymentMethods.length > 0 && savingInitialAmount && parseCOP(savingInitialAmount) > 0 && (
+            <div>
+              <label className="text-label-sm" style={{ display: 'block', marginBottom: '6px' }}>
+                Cuenta o medio de donde sale el dinero (Bolsillo)
+              </label>
+              <select
+                value={savingPaymentMethodId}
+                onChange={(e) => setSavingPaymentMethodId(e.target.value)}
+                style={{
+                  width: '100%',
+                  padding: '11px',
+                  borderRadius: '10px',
+                  border: '1px solid var(--color-outline-variant)',
+                  backgroundColor: 'var(--color-surface-container-lowest)',
+                }}
+              >
+                <option value="">Selecciona cuenta / método (Opcional)</option>
+                {paymentMethods.map((pm) => (
+                  <option key={pm.id} value={pm.id}>
+                    {pm.alias} ({pm.holderName || 'Titular'})
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
             <Input
               label="Fecha objetivo (Opcional)"
@@ -674,7 +763,9 @@ export default function MetasAhorro() {
 
           {partner && (
             <div>
-              <label className="text-label-sm">¿Quién realiza el aporte?</label>
+              <label className="text-label-sm">
+                {contributeType === 'add' ? '¿Quién aporta?' : '¿Quién recibe el retiro?'}
+              </label>
               <select
                 value={contributorUid || user.uid}
                 onChange={(e) => setContributorUid(e.target.value)}
@@ -688,6 +779,35 @@ export default function MetasAhorro() {
               >
                 <option value={user.uid}>{profile?.displayName?.split(' ')[0] || 'Yo'}</option>
                 <option value={partner.uid}>{partner.displayName?.split(' ')[0] || 'Pareja'}</option>
+              </select>
+            </div>
+          )}
+
+          {paymentMethods.length > 0 && (
+            <div>
+              <label className="text-label-sm">
+                {contributeType === 'add'
+                  ? 'Cuenta o medio de origen (Bolsillo)'
+                  : 'Cuenta o medio de destino (Reintegro)'}
+              </label>
+              <select
+                value={contributePaymentMethodId}
+                onChange={(e) => setContributePaymentMethodId(e.target.value)}
+                style={{
+                  width: '100%',
+                  padding: '10px',
+                  borderRadius: '10px',
+                  border: '1px solid var(--color-outline-variant)',
+                  backgroundColor: 'var(--color-surface-container-lowest)',
+                  marginTop: '4px',
+                }}
+              >
+                <option value="">Selecciona cuenta / método (Opcional)</option>
+                {paymentMethods.map((pm) => (
+                  <option key={pm.id} value={pm.id}>
+                    {pm.alias} ({pm.holderName || 'Titular'})
+                  </option>
+                ))}
               </select>
             </div>
           )}

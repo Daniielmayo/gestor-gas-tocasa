@@ -1,14 +1,15 @@
 .main {
-  padding: 0 16px var(--spacing-xxl) 16px;
+  padding: 0 20px var(--spacing-xxl) 20px;
   max-width: 600px;
   margin: 0 auto;
+  box-sizing: border-box;
 }
 
 .header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: var(--spacing-md) 0;
+  padding: var(--spacing-md) 4px;
   position: sticky;
   top: 0;
   background-color: var(--color-surface);

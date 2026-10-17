@@ -24,7 +24,29 @@
 }
 
 .header {
-  padding: 24px 24px 8px;
+  padding: 20px 24px 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.closeBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50% !important;
+  color: var(--color-on-surface-variant);
+  background: var(--color-surface-container-low);
+  transition: background-color 0.15s ease, color 0.15s ease;
+  flex-shrink: 0;
+}
+
+.closeBtn:hover {
+  background: var(--color-surface-container-high);
+  color: var(--color-on-surface);
 }
 
 .content {

@@ -456,53 +456,50 @@ export default function Deudas() {
   return (
     <main className={`container ${styles.main}`} style={{ paddingBottom: '100px' }}>
       <header className={styles.header}>
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            width: '100%',
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <Link href="/finanzas">
-              <Button variant="ghost" className={styles.iconBtn}>
-                <ArrowLeft size={22} />
-              </Button>
-            </Link>
-            <div>
-              <h1 className="text-headline-sm" style={{ margin: 0 }}>
-                Deudas de Tarjetas y Abonos
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', width: '100%' }}>
+          {/* Fila superior: navegación y acciones principales */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Link href="/finanzas">
+                <Button variant="ghost" className={styles.iconBtn} style={{ padding: '6px' }}>
+                  <ArrowLeft size={22} />
+                </Button>
+              </Link>
+              <h1 className="text-headline-sm" style={{ margin: 0, fontSize: '18px' }}>
+                Deudas de Tarjetas
               </h1>
-              <p className="text-label-sm" style={{ color: 'var(--color-on-surface-variant)' }}>
-                Cada abono descuenta tu deuda e impacta el Balance General
-              </p>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              {partner && (
+                <AvatarGroup
+                  users={[usersMap[user.uid], usersMap[partner.uid]].filter(Boolean) as any}
+                  size="sm"
+                />
+              )}
+              <Button
+                variant="ghost"
+                className={styles.iconBtn}
+                onClick={() => setIsConfigOpen(true)}
+                title="Configurar Tarjetas"
+                style={{ padding: '6px' }}
+              >
+                <Settings size={20} />
+              </Button>
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={() => setIsNewDebtModalOpen(true)}
+                style={{ padding: '6px 14px', fontSize: '12px' }}
+              >
+                <Plus size={15} style={{ marginRight: '4px' }} /> Nueva Deuda
+              </Button>
             </div>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            {partner && (
-              <AvatarGroup
-                users={[usersMap[user.uid], usersMap[partner.uid]].filter(Boolean) as any}
-                size="sm"
-              />
-            )}
-            <Button
-              variant="ghost"
-              className={styles.iconBtn}
-              onClick={() => setIsConfigOpen(true)}
-              title="Configurar Tarjetas"
-            >
-              <Settings size={20} />
-            </Button>
-            <Button
-              variant="primary"
-              size="sm"
-              onClick={() => setIsNewDebtModalOpen(true)}
-            >
-              <Plus size={15} style={{ marginRight: '4px' }} /> + Deuda TC
-            </Button>
-          </div>
+          <p className="text-label-sm" style={{ color: 'var(--color-on-surface-variant)', margin: '0 4px' }}>
+            Cada abono descuenta tu deuda e impacta el Balance General
+          </p>
         </div>
       </header>
 

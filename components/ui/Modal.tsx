@@ -1,4 +1,5 @@
 import React from 'react';
+import { X } from 'lucide-react';
 import styles from './Modal.module.css';
 
 interface ModalProps {
@@ -21,6 +22,15 @@ export function Modal({ isOpen, onClose, title, children }: ModalProps) {
       >
         <div className={styles.header}>
           <h2 className="text-headline-sm">{title}</h2>
+          <button
+            type="button"
+            className={styles.closeBtn}
+            onClick={onClose}
+            aria-label="Cerrar modal"
+            title="Cerrar"
+          >
+            <X size={20} />
+          </button>
         </div>
         <div className={styles.content}>
           {children}
