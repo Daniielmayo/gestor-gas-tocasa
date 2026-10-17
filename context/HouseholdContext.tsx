@@ -213,7 +213,7 @@ export function HouseholdProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  // 1. Bootstrap or subscribe to Household + automatic non-destructive backfill & household deduplication
+  // 1. Real-time subscription to user's Household with automatic bidirectional discovery & deduplication
   useEffect(() => {
     if (!user) {
       setHousehold(null);
@@ -221,113 +221,91 @@ export function HouseholdProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    let unsubHousehold: (() => void) | null = null;
+    setLoadingHousehold(true);
 
-    const initHousehold = async () => {
-      try {
-        const hhRef = collection(db, 'households');
-        const qHh = query(hhRef, where('memberIds', 'array-contains', user.uid));
-        const snap = await getDocs(qHh);
+    const hhRef = collection(db, 'households');
+    const qHh = query(hhRef, where('memberIds', 'array-contains', user.uid));
 
-        // Also check legacy financeSettings / paymentsSettings for any linked partner
-        const discoveredMembers = new Set<string>([user.uid]);
-        try {
-          const finSetSnap = await getDoc(doc(db, 'financeSettings', user.uid));
-          if (finSetSnap.exists()) {
-            const sw = finSetSnap.data().sharedWith || [];
-            sw.forEach((id: string) => id && discoveredMembers.add(id));
-          }
-          const paySetSnap = await getDoc(doc(db, 'paymentsSettings', user.uid));
-          if (paySetSnap.exists()) {
-            const sw = paySetSnap.data().sharedWith || [];
-            sw.forEach((id: string) => id && discoveredMembers.add(id));
-          }
-        } catch (e) {
-          // ignore
-        }
-
-        let targetHouseholdId = '';
-
+    // Listen in real-time to any changes in households where user is a member
+    const unsubHouseholdQuery = onSnapshot(
+      qHh,
+      async (snap) => {
         if (!snap.empty) {
-          // Prefer a household that already has >1 member (shared with partner)
           const docs = snap.docs;
-          docs.forEach((d) => {
-            const mIds: string[] = d.data().memberIds || [];
-            mIds.forEach((id) => id && discoveredMembers.add(id));
-          });
-
+          // Prefer a household that has more than 1 member (the shared household)
           const sharedDoc = docs.find((d) => (d.data().memberIds || []).length > 1) || docs[0];
-          targetHouseholdId = sharedDoc.id;
+          const activeHh = { id: sharedDoc.id, ...sharedDoc.data() } as Household;
+          setHousehold(activeHh);
+          setLoadingHousehold(false);
 
-          const allMembers = Array.from(discoveredMembers);
-          const currentMembers: string[] = sharedDoc.data().memberIds || [];
-          if (allMembers.some((m) => !currentMembers.includes(m))) {
-            await updateDoc(doc(db, 'households', targetHouseholdId), {
-              memberIds: arrayUnion(...allMembers),
-            });
-          }
-
-          // Remove any duplicate solo household documents so both partners always resolve to the same household
-          for (const d of docs) {
-            if (d.id !== targetHouseholdId) {
-              try {
-                await deleteDoc(doc(db, 'households', d.id));
-              } catch (e) {
-                // ignore
+          // Auto-heal: If there are duplicate solo household docs for this user, clean them up
+          if (docs.length > 1 && docs.some((d) => (d.data().memberIds || []).length > 1)) {
+            for (const d of docs) {
+              if (d.id !== sharedDoc.id) {
+                try {
+                  await deleteDoc(doc(db, 'households', d.id));
+                } catch (e) {
+                  // ignore
+                }
               }
             }
           }
         } else {
-          // Check if discovered partner already created a household
-          const memberArray = Array.from(discoveredMembers);
-          const partnerCandidate = memberArray.find((id) => id !== user.uid);
-          if (partnerCandidate) {
-            const qPartnerHh = query(hhRef, where('memberIds', 'array-contains', partnerCandidate));
-            const pSnap = await getDocs(qPartnerHh);
-            if (!pSnap.empty) {
-              targetHouseholdId = pSnap.docs[0].id;
-              await updateDoc(doc(db, 'households', targetHouseholdId), {
-                memberIds: arrayUnion(...memberArray),
-              });
-            }
-          }
+          // No household found with memberIds array-contains user.uid yet.
+          // Check if another user linked us via legacy settings or invite
+          try {
+            const finSetSnap = await getDoc(doc(db, 'financeSettings', user.uid));
+            const legacyPartners: string[] = finSetSnap.exists()
+              ? finSetSnap.data().sharedWith || []
+              : [];
 
-          if (!targetHouseholdId) {
-            const newHhId = `hh_${user.uid.substring(0, 10)}`;
-            const newHousehold: Household = {
-              id: newHhId,
-              name: 'Nuestro Hogar',
-              currency: 'COP',
-              timezone: 'America/Bogota',
-              splitRule: '50_50',
-              memberIds: memberArray,
-              inviteCode: generateInviteCode(user.uid),
-              personalVisibility: 'full_detail',
-              createdAt: serverTimestamp(),
-              updatedAt: serverTimestamp(),
-            };
-            await setDoc(doc(db, 'households', newHhId), newHousehold);
-            targetHouseholdId = newHhId;
+            let foundHhId = '';
+            for (const pUid of legacyPartners) {
+              if (pUid && pUid !== user.uid) {
+                const qPartner = query(hhRef, where('memberIds', 'array-contains', pUid));
+                const pSnap = await getDocs(qPartner);
+                if (!pSnap.empty) {
+                  foundHhId = pSnap.docs[0].id;
+                  await updateDoc(doc(db, 'households', foundHhId), {
+                    memberIds: arrayUnion(user.uid),
+                    updatedAt: serverTimestamp(),
+                  });
+                  break;
+                }
+              }
+            }
+
+            if (!foundHhId) {
+              // Create an initial solo household for this user
+              const newHhId = `hh_${user.uid.substring(0, 10)}`;
+              const newHousehold: Household = {
+                id: newHhId,
+                name: 'Nuestro Hogar',
+                currency: 'COP',
+                timezone: 'America/Bogota',
+                splitRule: '50_50',
+                memberIds: [user.uid],
+                inviteCode: generateInviteCode(user.uid),
+                personalVisibility: 'full_detail',
+                createdAt: serverTimestamp(),
+                updatedAt: serverTimestamp(),
+              };
+              await setDoc(doc(db, 'households', newHhId), newHousehold);
+            }
+          } catch (err) {
+            console.error('Error auto-creating or discovering household:', err);
+            setLoadingHousehold(false);
           }
         }
-
-        // Subscribe to household document
-        unsubHousehold = onSnapshot(doc(db, 'households', targetHouseholdId), (docSnap) => {
-          if (docSnap.exists()) {
-            setHousehold({ id: docSnap.id, ...docSnap.data() } as Household);
-          }
-          setLoadingHousehold(false);
-        });
-      } catch (err) {
-        console.error('Error initializing household:', err);
+      },
+      (err) => {
+        console.error('Error listening to user households:', err);
         setLoadingHousehold(false);
       }
-    };
-
-    initHousehold();
+    );
 
     return () => {
-      if (unsubHousehold) unsubHousehold();
+      unsubHouseholdQuery();
     };
   }, [user]);
 
