@@ -1,5 +1,5 @@
 'use client';
-import React, { useState, useEffect, FormEvent } from 'react';
+import React, { useState, useEffect, useMemo, FormEvent } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Card } from '@/components/ui/Card';
@@ -7,21 +7,59 @@ import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { Spinner } from '@/components/ui/Spinner';
 import { Modal } from '@/components/ui/Modal';
-import { UserEmailAutocomplete } from '@/components/ui/UserEmailAutocomplete';
+import { ScopeFilterBar } from '@/components/ui/ScopeFilterBar';
+import { FixedCashflowWorksheet } from '@/components/finanzas/FixedCashflowWorksheet';
+import { QuickMovementModal } from '@/components/finanzas/QuickMovementModal';
+import { BudgetManagerModal } from '@/components/finanzas/BudgetManagerModal';
 import { useUsersMap } from '@/lib/hooks/useUsersMap';
 import { AvatarGroup } from '@/components/ui/AvatarGroup';
-import { sendPushNotification } from '@/lib/pushUtils';
-import { ArrowLeft, Calendar, Settings, UserPlus, Trash2, Lock, Users, Pencil } from 'lucide-react';
+import {
+  ArrowLeft,
+  Calendar,
+  Trash2,
+  Pencil,
+  TrendingUp,
+  ChevronLeft,
+  ChevronRight,
+  Plus,
+  Receipt,
+  Layers,
+  Table2,
+  Target,
+  CreditCard,
+} from 'lucide-react';
 import styles from './recurrentes.module.css';
 import { useAuth } from '@/context/AuthContext';
+import { useHousehold } from '@/context/HouseholdContext';
 import { db } from '@/lib/firebase';
-import { collection, query, where, onSnapshot, addDoc, serverTimestamp, or, doc, updateDoc, deleteDoc, getDocs, arrayUnion, setDoc, Timestamp } from 'firebase/firestore';
+import {
+  collection,
+  query,
+  where,
+  onSnapshot,
+  addDoc,
+  serverTimestamp,
+  or,
+  doc,
+  updateDoc,
+  deleteDoc,
+  Timestamp,
+} from 'firebase/firestore';
 import { formatCOP, formatInputCOP, parseCOP } from '@/lib/currency';
+import {
+  BudgetDoc,
+  EnhancedTransaction,
+  Scope,
+  UserPeriodWorksheet,
+} from '@/lib/models';
+import { evaluateBudgetStatus } from '@/lib/budgetEngine';
 
-interface Payment {
+interface RecurringItem {
   id: string;
+  flowType?: 'expense' | 'income';
+  scope?: Scope;
   title: string;
-  amount: string;
+  amount: number;
   days: number[];
   ownerId: string;
   sharedWith?: string[];
@@ -29,70 +67,75 @@ interface Payment {
   description?: string;
 }
 
-const PAYMENT_CATEGORIES = [
-  'Hogar / Casa',
-  'Servicios Públicos',
+const EXPENSE_RECURRING_CATS = [
+  'Hogar / Alquiler',
+  'Servicios',
   'Streaming / Suscripciones',
-  'Salud / Médico',
+  'Salud',
   'Educación',
   'Transporte',
-  'Tarjetas / Créditos',
+  'Pago Deuda / Tarjeta',
 ];
 
-interface CustomCategory {
-  id: string;
-  name: string;
-  type: 'payment';
-}
+const INCOME_RECURRING_CATS = [
+  'Sueldo / Quincena',
+  'Arriendo Recibido',
+  'Freelance / Extra',
+];
+
+type PagosTab = 'planilla' | 'esporadicos' | 'unificado' | 'plantillas';
 
 export default function RecurringPayments() {
   const { user, profile, loading } = useAuth();
+  const { household, partner, partnerUid, globalScope, paymentMethods } = useHousehold();
   const router = useRouter();
   const { usersMap } = useUsersMap();
 
-  const [selectedDays, setSelectedDays] = useState<number[]>([]);
+  // Main navigation inside Pagos (default 'all' = Todos, filterable by Quincena)
+  const [activeTab, setActiveTab] = useState<PagosTab>('planilla');
+  const [currentDate, setCurrentDate] = useState(new Date());
+  const [quincenaFilter, setQuincenaFilter] = useState<'all' | 'q1' | 'q2'>('all');
+
+  // Data collections
+  const [payments, setPayments] = useState<RecurringItem[]>([]);
+  const [transactions, setTransactions] = useState<EnhancedTransaction[]>([]);
+  const [worksheets, setWorksheets] = useState<UserPeriodWorksheet[]>([]);
+  const [budgets, setBudgets] = useState<BudgetDoc[]>([]);
+  const [paidPaymentIds, setPaidPaymentIds] = useState<Set<string>>(new Set());
+
+  // Quick Sporadic Payment Modal
+  const [isQuickSporadicOpen, setIsQuickSporadicOpen] = useState(false);
+  const [editingSporadicTx, setEditingSporadicTx] = useState<EnhancedTransaction | null>(null);
+
+  // Category/Tag Budget Modal (moved here from Finanzas)
+  const [isBudgetModalOpen, setIsBudgetModalOpen] = useState(false);
+
+  // Recurring template form state
+  const [flowType, setFlowType] = useState<'expense' | 'income'>('expense');
+  const [scope, setScope] = useState<Scope>('personal');
+  const [selectedDays, setSelectedDays] = useState<number[]>([15, 30]);
   const [title, setTitle] = useState('');
   const [amount, setAmount] = useState('');
-  const [category, setCategory] = useState(PAYMENT_CATEGORIES[0]);
+  const [category, setCategory] = useState(EXPENSE_RECURRING_CATS[0]);
   const [description, setDescription] = useState('');
-  const [payments, setPayments] = useState<Payment[]>([]);
-  
-  // Filter state
   const [filterDay, setFilterDay] = useState<number | 'all'>('all');
-  const [filterVisibility, setFilterVisibility] = useState<'all' | 'personal' | 'shared'>('all');
 
-  // Form state
-  const [isShared, setIsShared] = useState(false);
-
-  // Modals state
-  const [selectedPayment, setSelectedPayment] = useState<Payment | null>(null);
-  const [isShareModalOpen, setIsShareModalOpen] = useState(false);
+  // Modals for templates
+  const [selectedPayment, setSelectedPayment] = useState<RecurringItem | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [editTitle, setEditTitle] = useState('');
   const [editAmount, setEditAmount] = useState('');
-  const [editCategory, setEditCategory] = useState(PAYMENT_CATEGORIES[0]);
+  const [editCategory, setEditCategory] = useState(EXPENSE_RECURRING_CATS[0]);
   const [editDescription, setEditDescription] = useState('');
   const [editSelectedDays, setEditSelectedDays] = useState<number[]>([]);
-  const [editIsShared, setEditIsShared] = useState(true);
-  const [editShareEmail, setEditShareEmail] = useState('');
+  const [editScope, setEditScope] = useState<Scope>('personal');
 
-  const [shareEmail, setShareEmail] = useState('');
-  const [createShareEmail, setCreateShareEmail] = useState('');
+  // Confirm / Adjust occurrence modal
+  const [confirmingItem, setConfirmingItem] = useState<RecurringItem | null>(null);
+  const [confirmAdjustedAmount, setConfirmAdjustedAmount] = useState('');
+  const [isConfirming, setIsConfirming] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [paymentsSettings, setPaymentsSettings] = useState<any>(null);
-  const [paidPaymentIds, setPaidPaymentIds] = useState<Set<string>>(new Set());
-
-  // Custom Categories state
-  const [customCategories, setCustomCategories] = useState<CustomCategory[]>([]);
-  const [isCategoriesModalOpen, setIsCategoriesModalOpen] = useState(false);
-  const [newCategoryName, setNewCategoryName] = useState('');
-  
-  // Custom Category Edit State
-  const [editingCategoryId, setEditingCategoryId] = useState<string | null>(null);
-  const [editCategoryName, setEditCategoryName] = useState('');
-
-  const combinedCategories = [...PAYMENT_CATEGORIES, ...customCategories.map(c => c.name), 'Otro'];
 
   useEffect(() => {
     if (!loading && !user) {
@@ -103,304 +146,381 @@ export default function RecurringPayments() {
   useEffect(() => {
     if (!user) return;
 
+    // 1. Recurring Templates
     const paymentsRef = collection(db, 'recurringPayments');
-    const q = query(
+    const qRec = query(
       paymentsRef,
-      or(
-        where('ownerId', '==', user.uid),
-        where('sharedWith', 'array-contains', user.uid)
-      )
+      or(where('ownerId', '==', user.uid), where('sharedWith', 'array-contains', user.uid))
     );
-
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const data: Payment[] = [];
-      snapshot.forEach(doc => {
-        data.push({ id: doc.id, ...doc.data() } as Payment);
+    const unsubRec = onSnapshot(qRec, (snapshot) => {
+      const data: RecurringItem[] = [];
+      snapshot.forEach((d) => {
+        data.push({ id: d.id, ...d.data() } as RecurringItem);
       });
       setPayments(data);
     });
 
-    const settingsRef = doc(db, 'paymentsSettings', user.uid);
-    const unsubSettings = onSnapshot(settingsRef, (docSnap) => {
-      if (docSnap.exists()) {
-        setPaymentsSettings(docSnap.data());
-      } else {
-        setPaymentsSettings({ sharedWith: [] });
-      }
-    });
-
+    // 2. Transactions (Sporadic payments & incomes)
     const txRef = collection(db, 'transactions');
     const qTx = query(
       txRef,
-      or(
-        where('ownerId', '==', user.uid),
-        where('sharedWith', 'array-contains', user.uid)
-      )
+      or(where('ownerId', '==', user.uid), where('sharedWith', 'array-contains', user.uid))
     );
     const unsubTx = onSnapshot(qTx, (snapshot) => {
       const paidIds = new Set<string>();
+      const txList: EnhancedTransaction[] = [];
       const now = new Date();
       const currentMonth = now.getMonth();
       const currentYear = now.getFullYear();
 
-      snapshot.forEach(doc => {
-        const t = doc.data();
-        if (t.recurringPaymentId && t.createdAt) {
-          const date = t.createdAt.toDate();
+      snapshot.forEach((d) => {
+        const raw = d.data() as EnhancedTransaction;
+        txList.push({ ...raw, id: d.id });
+        if (raw.deletedAt) return;
+        if (raw.recurringPaymentId && raw.createdAt) {
+          const date = raw.createdAt.toDate ? raw.createdAt.toDate() : new Date();
           if (date.getMonth() === currentMonth && date.getFullYear() === currentYear) {
-            paidIds.add(t.recurringPaymentId);
+            paidIds.add(raw.recurringPaymentId);
           }
         }
       });
+      setTransactions(txList);
       setPaidPaymentIds(paidIds);
     });
 
-    const catRef = collection(db, 'financeCategories');
-    const qCat = query(catRef, where('ownerId', '==', user.uid), where('type', '==', 'payment'));
-    const unsubCat = onSnapshot(qCat, (snapshot) => {
-      const data: CustomCategory[] = [];
-      snapshot.forEach(doc => data.push({ id: doc.id, ...doc.data() } as CustomCategory));
-      setCustomCategories(data);
+    // 3. Period Worksheets (for Unified view)
+    const wsRef = collection(db, 'periodWorksheets');
+    const qWs = query(
+      wsRef,
+      or(where('userId', '==', user.uid), where('sharedWith', 'array-contains', user.uid))
+    );
+    const unsubWs = onSnapshot(qWs, (snap) => {
+      const list: UserPeriodWorksheet[] = [];
+      snap.forEach((d) => list.push({ ...(d.data() as UserPeriodWorksheet), id: d.id }));
+      setWorksheets(list);
+    });
+
+    // 4. Category/Tag Budgets
+    const bRef = collection(db, 'budgets');
+    const qB = query(
+      bRef,
+      or(where('ownerId', '==', user.uid), where('sharedWith', 'array-contains', user.uid))
+    );
+    const unsubB = onSnapshot(qB, (snap) => {
+      const list: BudgetDoc[] = [];
+      snap.forEach((d) => list.push({ ...(d.data() as BudgetDoc), id: d.id }));
+      setBudgets(list);
     });
 
     return () => {
-      unsubscribe();
-      unsubSettings();
+      unsubRec();
       unsubTx();
-      unsubCat();
+      unsubWs();
+      unsubB();
     };
   }, [user]);
 
-  const toggleDay = (day: number) => {
-    setSelectedDays(prev => 
-      prev.includes(day) ? prev.filter(d => d !== day) : [...prev, day]
+  const prevMonth = () => {
+    setCurrentDate((prev) => new Date(prev.getFullYear(), prev.getMonth() - 1, 1));
+  };
+
+  const nextMonth = () => {
+    setCurrentDate((prev) => new Date(prev.getFullYear(), prev.getMonth() + 1, 1));
+  };
+
+  const monthLabel = useMemo(() => {
+    return currentDate.toLocaleDateString('es-CO', { month: 'long', year: 'numeric' });
+  }, [currentDate]);
+
+  const periodKey = useMemo(() => {
+    const y = currentDate.getFullYear();
+    const m = String(currentDate.getMonth() + 1).padStart(2, '0');
+    if (quincenaFilter === 'q1') return `${y}-${m}-Q1`;
+    if (quincenaFilter === 'q2') return `${y}-${m}-Q2`;
+    return `${y}-${m}`;
+  }, [currentDate, quincenaFilter]);
+
+  // Transactions in selected month & quincena
+  const periodTransactions = useMemo(() => {
+    const m = currentDate.getMonth();
+    const y = currentDate.getFullYear();
+
+    return transactions.filter((t) => {
+      if (t.deletedAt) return false;
+      const d = t.createdAt?.toDate ? t.createdAt.toDate() : new Date();
+      if (d.getMonth() !== m || d.getFullYear() !== y) return false;
+      const day = d.getDate();
+      if (quincenaFilter === 'q1' && day > 15) return false;
+      if (quincenaFilter === 'q2' && day <= 15) return false;
+      return true;
+    });
+  }, [transactions, currentDate, quincenaFilter]);
+
+  // Scope-filtered Sporadic / Extra Payments (outside fixed worksheet)
+  const sporadicExpenses = useMemo(() => {
+    return periodTransactions
+      .filter((t) => t.type === 'expense' && !t.recurringPaymentId)
+      .filter((t) => {
+        const txScope: Scope =
+          t.scope || (t.sharedWith && t.sharedWith.length > 0 ? 'conjunto' : 'personal');
+        const payer = t.paidByUserId || t.ownerId;
+        if (globalScope === 'mio') return payer === user?.uid;
+        if (globalScope === 'pareja' && partnerUid) return payer === partnerUid;
+        if (globalScope === 'conjunto') return txScope === 'conjunto';
+        return true;
+      })
+      .sort((a, b) => {
+        const da = a.createdAt?.toDate ? a.createdAt.toDate().getTime() : 0;
+        const dbTime = b.createdAt?.toDate ? b.createdAt.toDate().getTime() : 0;
+        return dbTime - da;
+      });
+  }, [periodTransactions, globalScope, user?.uid, partnerUid]);
+
+  // Unified items (Fixed Worksheet Obligations + Sporadic Payments)
+  const unifiedItems = useMemo(() => {
+    const items: Array<{
+      id: string;
+      kind: 'fijo' | 'esporadico';
+      title: string;
+      amount: number;
+      ownerName: string;
+      ownerId: string;
+      categoryOrStatus: string;
+      paid: boolean;
+      dateLabel: string;
+      rawTx?: EnhancedTransaction;
+    }> = [];
+
+    // 1. Add Fixed Obligations from Worksheets matching current periodKey (or Q1+Q2 when 'all') and scope
+    const y = currentDate.getFullYear();
+    const m = String(currentDate.getMonth() + 1).padStart(2, '0');
+    const ymPrefix = `${y}-${m}`;
+
+    const relevantWorksheets = worksheets.filter((w) => {
+      const matchesPeriod =
+        quincenaFilter === 'all'
+          ? w.periodKey === `${ymPrefix}-Q1` ||
+            w.periodKey === `${ymPrefix}-Q2` ||
+            w.periodKey === ymPrefix
+          : w.periodKey === periodKey;
+      if (!matchesPeriod) return false;
+      if (globalScope === 'mio') return w.userId === user?.uid;
+      if (globalScope === 'pareja' && partnerUid) return w.userId === partnerUid;
+      return true;
+    });
+
+    for (const ws of relevantWorksheets) {
+      const qLabel = ws.periodKey.endsWith('-Q1')
+        ? '1ª Quincena (15)'
+        : ws.periodKey.endsWith('-Q2')
+        ? '2ª Quincena (30)'
+        : ws.periodKey;
+      for (const ob of ws.obligations || []) {
+        items.push({
+          id: `ws_${ws.periodKey}_${ws.userId}_${ob.id}`,
+          kind: 'fijo',
+          title: ob.concept,
+          amount: Number(ob.amount || 0),
+          ownerName: ws.userName || (ws.userId === user?.uid ? 'Mío' : 'Pareja'),
+          ownerId: ws.userId,
+          categoryOrStatus: ob.amount < 0 ? 'Ahorro / Descuento Fijo' : 'Presupuesto Fijo',
+          paid: Boolean(ob.paid),
+          dateLabel: qLabel,
+        });
+      }
+    }
+
+    // 2. Add Sporadic / Extra Payments
+    for (const tx of sporadicExpenses) {
+      const d = tx.createdAt?.toDate ? tx.createdAt.toDate() : new Date();
+      items.push({
+        id: tx.id,
+        kind: 'esporadico',
+        title: tx.place || tx.title || tx.description || tx.category,
+        amount: Number(tx.amount || 0),
+        ownerName: tx.paidByName || tx.ownerName || 'Miembro',
+        ownerId: tx.paidByUserId || tx.ownerId,
+        categoryOrStatus: tx.category || 'Gasto Esporádico',
+        paid: true,
+        dateLabel: d.toLocaleDateString('es-CO', { day: '2-digit', month: 'short' }),
+        rawTx: tx,
+      });
+    }
+
+    return items;
+  }, [worksheets, periodKey, globalScope, user?.uid, partnerUid, sporadicExpenses]);
+
+  const totalUnifiedFixed = useMemo(
+    () =>
+      unifiedItems
+        .filter((i) => i.kind === 'fijo')
+        .reduce((sum, i) => sum + i.amount, 0),
+    [unifiedItems]
+  );
+
+  const totalUnifiedSporadic = useMemo(
+    () =>
+      unifiedItems
+        .filter((i) => i.kind === 'esporadico')
+        .reduce((sum, i) => sum + i.amount, 0),
+    [unifiedItems]
+  );
+
+  // Category/Tag Budget Status (optional complement inside Planilla)
+  const currentBudgetDoc = useMemo(() => {
+    const targetScope: Scope = globalScope === 'mio' || globalScope === 'pareja' ? 'personal' : 'conjunto';
+    return (
+      budgets.find((b) => b.periodKey === periodKey && b.scope === targetScope) ||
+      budgets.find((b) => b.periodKey === periodKey) ||
+      null
     );
+  }, [budgets, periodKey, globalScope]);
+
+  const currentBudgetStatus = useMemo(() => {
+    if (!currentBudgetDoc || !user) return null;
+    return evaluateBudgetStatus(currentBudgetDoc, periodTransactions, user.uid);
+  }, [currentBudgetDoc, periodTransactions, user]);
+
+  const toggleDay = (day: number) => {
+    setSelectedDays((prev) =>
+      prev.includes(day) ? prev.filter((d) => d !== day) : [...prev, day]
+    );
+  };
+
+  const applyQuickQuincena = () => {
+    setSelectedDays([15, 30]);
   };
 
   const handleSavePayment = async (e: FormEvent) => {
     e.preventDefault();
     if (!user || !profile || !title.trim() || !amount.trim() || selectedDays.length === 0) {
-      alert("Por favor completa todos los campos y selecciona al menos un día.");
-      return;
-    }
-
-    if (isShared && !createShareEmail.trim() && (!paymentsSettings?.sharedWith || paymentsSettings.sharedWith.length === 0)) {
-      alert("Al habilitar la opción de compartir, debes escribir el correo de la persona con la que deseas compartir, o desmarcar la casilla.");
+      alert('Por favor completa el nombre, monto y selecciona al menos un día del mes.');
       return;
     }
 
     try {
-      let currentSharedWith = paymentsSettings?.sharedWith || [];
-      if (createShareEmail.trim()) {
-        const usersRef = collection(db, 'users');
-        const q = query(usersRef, where('email', '==', createShareEmail.trim().toLowerCase()));
-        const snap = await getDocs(q);
-        if (!snap.empty) {
-          const friendUid = snap.docs[0].data().uid;
-          if (friendUid !== user.uid) {
-            const settingsRef = doc(db, 'paymentsSettings', user.uid);
-            await setDoc(settingsRef, { sharedWith: arrayUnion(friendUid) }, { merge: true });
-            currentSharedWith = [...new Set([...currentSharedWith, friendUid])];
-            if (!(paymentsSettings?.sharedWith || []).includes(friendUid)) {
-              await addDoc(collection(db, 'notifications'), {
-                userId: friendUid,
-                title: 'Pagos Compartidos',
-                message: `${profile?.displayName || 'Alguien'} ha compartido sus pagos contigo al crear un pago recurrente.`,
-                type: 'payment',
-                link: '/pagos/recurrentes',
-                read: false,
-                createdAt: Timestamp.now()
-              });
-            }
-          }
-        }
-      }
-
+      const sharedWithArray = scope === 'conjunto' && partnerUid ? [partnerUid] : [];
       const paymentData = {
+        householdId: household?.id || 'default',
+        flowType,
+        scope,
         title: title.trim(),
         amount: parseCOP(amount),
-        days: selectedDays.sort((a,b) => a - b),
+        days: selectedDays.sort((a, b) => a - b),
         ownerId: user.uid,
-        sharedWith: isShared && currentSharedWith ? currentSharedWith : [],
-        category: category,
+        sharedWith: sharedWithArray,
+        category,
         description: description.trim(),
-        createdAt: serverTimestamp()
+        createdAt: serverTimestamp(),
       };
 
       await addDoc(collection(db, 'recurringPayments'), paymentData);
-      
-      import('@/lib/history').then(({ logActivity }) => {
-        logActivity(`<strong>${profile.displayName}</strong> programó el pago recurrente '${title.trim()}' por ${formatCOP(parseCOP(amount))}`, user.uid, []);
-      });
 
       setTitle('');
       setAmount('');
-      setSelectedDays([]);
-      setCategory(combinedCategories[0] || PAYMENT_CATEGORIES[0]);
+      setSelectedDays([15, 30]);
       setDescription('');
-      setIsShared(true);
-      setCreateShareEmail('');
     } catch (error) {
-      console.error("Error al guardar pago:", error);
+      console.error('Error al guardar programación:', error);
     }
   };
 
-  const openShareModal = () => {
-    setShareEmail('');
-    setIsShareModalOpen(true);
+  const handleConfirmOccurrence = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!user || !profile || !confirmingItem || isConfirming) return;
+    const finalAmt = parseCOP(confirmAdjustedAmount);
+    if (finalAmt <= 0) return;
+
+    setIsConfirming(true);
+    try {
+      const isIncome = confirmingItem.flowType === 'income';
+      const itemScope: Scope =
+        confirmingItem.scope ||
+        (confirmingItem.sharedWith && confirmingItem.sharedWith.length > 0
+          ? 'conjunto'
+          : 'personal');
+
+      await addDoc(collection(db, 'transactions'), {
+        type: isIncome ? 'income' : 'expense',
+        amount: finalAmt,
+        category: confirmingItem.category || (isIncome ? 'Sueldo / Quincena' : 'Servicios'),
+        place: confirmingItem.title,
+        title: confirmingItem.title,
+        description: confirmingItem.description || confirmingItem.title,
+        scope: itemScope,
+        incomeType: isIncome ? 'fijo' : undefined,
+        paidByUserId: user.uid,
+        paidByName: profile.displayName?.split(' ')[0] || 'Yo',
+        recurringPaymentId: confirmingItem.id,
+        recurringPaymentTitle: confirmingItem.title,
+        ownerId: user.uid,
+        ownerName: profile.displayName?.split(' ')[0] || 'Usuario',
+        sharedWith: itemScope === 'conjunto' && partnerUid ? [partnerUid] : [],
+        deletedAt: null,
+        createdAt: Timestamp.now(),
+      });
+
+      setConfirmingItem(null);
+      setConfirmAdjustedAmount('');
+    } catch (err) {
+      console.error('Error confirming recurring occurrence:', err);
+    } finally {
+      setIsConfirming(false);
+    }
   };
 
-  const openDeleteModal = (payment: Payment) => {
-    setSelectedPayment(payment);
-    setIsDeleteModalOpen(true);
-  };
-
-  const openEditModal = (payment: Payment) => {
+  const openEditModal = (payment: RecurringItem) => {
     setSelectedPayment(payment);
     setEditTitle(payment.title);
-    setEditAmount(formatCOP(Number(payment.amount)));
-    setEditCategory(payment.category || combinedCategories[0] || PAYMENT_CATEGORIES[0]);
+    setEditAmount(formatInputCOP(String(payment.amount)));
+    setEditCategory(payment.category || EXPENSE_RECURRING_CATS[0]);
     setEditDescription(payment.description || '');
     setEditSelectedDays(payment.days || []);
-    setEditIsShared(payment.sharedWith && payment.sharedWith.length > 0 ? true : false);
-    setEditShareEmail('');
-    setIsEditModalOpen(true);
-  };
-
-  const toggleEditDay = (day: number) => {
-    setEditSelectedDays(prev => 
-      prev.includes(day) ? prev.filter(d => d !== day) : [...prev, day]
+    setEditScope(
+      payment.scope || (payment.sharedWith && payment.sharedWith.length > 0 ? 'conjunto' : 'personal')
     );
+    setIsEditModalOpen(true);
   };
 
   const handleEditPayment = async (e: FormEvent) => {
     e.preventDefault();
-    if (!selectedPayment || !user || !editTitle.trim() || !editAmount.trim() || editSelectedDays.length === 0) {
-      alert("Por favor completa todos los campos y selecciona al menos un día.");
-      return;
-    }
-
-    if (editIsShared && !editShareEmail.trim() && (!paymentsSettings?.sharedWith || paymentsSettings.sharedWith.length === 0)) {
-      alert("Al habilitar la opción de compartir, debes escribir el correo de la persona con la que deseas compartir, o desmarcar la casilla.");
+    if (
+      !selectedPayment ||
+      !user ||
+      !editTitle.trim() ||
+      !editAmount.trim() ||
+      editSelectedDays.length === 0
+    ) {
       return;
     }
 
     setIsProcessing(true);
     try {
-      const currentSharedWith = paymentsSettings?.sharedWith || [];
-      if (editShareEmail.trim()) {
-        const usersRef = collection(db, 'users');
-        const q = query(usersRef, where('email', '==', editShareEmail.trim().toLowerCase()));
-        const snap = await getDocs(q);
-        if (!snap.empty) {
-          const friendUid = snap.docs[0].data().uid;
-          if (friendUid !== user.uid) {
-            const settingsRef = doc(db, 'paymentsSettings', user.uid);
-            await setDoc(settingsRef, { sharedWith: arrayUnion(friendUid) }, { merge: true });
-            currentSharedWith.push(friendUid);
-            if (!(paymentsSettings?.sharedWith || []).includes(friendUid)) {
-              await addDoc(collection(db, 'notifications'), {
-                userId: friendUid,
-                title: 'Pagos Compartidos',
-                message: `${profile?.displayName || 'Alguien'} ha compartido sus pagos contigo al editar un pago recurrente.`,
-                type: 'payment',
-                link: '/pagos/recurrentes',
-                read: false,
-                createdAt: Timestamp.now()
-              });
-            }
-          }
-        }
-      }
-
-      const uniqueSharedWith = [...new Set(currentSharedWith)];
-
-      const updatedData = {
+      await updateDoc(doc(db, 'recurringPayments', selectedPayment.id), {
         title: editTitle.trim(),
         amount: parseCOP(editAmount),
-        days: editSelectedDays.sort((a,b) => a - b),
+        days: editSelectedDays.sort((a, b) => a - b),
         category: editCategory,
         description: editDescription.trim(),
-        sharedWith: editIsShared && uniqueSharedWith ? uniqueSharedWith : [],
-      };
-
-      await updateDoc(doc(db, 'recurringPayments', selectedPayment.id), updatedData);
-      
+        scope: editScope,
+        sharedWith: editScope === 'conjunto' && partnerUid ? [partnerUid] : [],
+      });
       setIsEditModalOpen(false);
     } catch (error) {
       console.error(error);
-      alert("Error al actualizar el pago");
-    } finally {
-      setIsProcessing(false);
-    }
-  };
-
-  const handleSharePayment = async (e: FormEvent) => {
-    e.preventDefault();
-    if (!shareEmail.trim() || !user || !profile) return;
-    setIsProcessing(true);
-
-    try {
-      const usersRef = collection(db, 'users');
-      const q = query(usersRef, where('email', '==', shareEmail.trim().toLowerCase()));
-      const snap = await getDocs(q);
-
-      if (snap.empty) {
-        alert("Ese correo electrónico no está registrado en la app.");
-        setIsProcessing(false);
-        return;
-      }
-
-      const friendDoc = snap.docs[0];
-      const friendUid = friendDoc.data().uid;
-      const friendName = friendDoc.data().displayName || shareEmail;
-
-      if (friendUid === user.uid) {
-        alert("No puedes invitarte a ti mismo.");
-        setIsProcessing(false);
-        return;
-      }
-
-      const settingsRef = doc(db, 'paymentsSettings', user.uid);
-      await setDoc(settingsRef, {
-        sharedWith: arrayUnion(friendUid)
-      }, { merge: true });
-
-      await addDoc(collection(db, 'notifications'), {
-        userId: friendUid,
-        title: 'Pagos Programados',
-        message: `${profile.displayName || 'Alguien'} ha compartido sus pagos programados contigo.`,
-        type: 'payment',
-        link: '/pagos/recurrentes',
-        read: false,
-        createdAt: Timestamp.now()
-      });
-
-      alert(`¡Módulo de pagos compartido con éxito con ${friendName}!`);
-      setIsShareModalOpen(false);
-      setShareEmail('');
-    } catch (error) {
-      console.error(error);
-      alert("Hubo un error al compartir.");
     } finally {
       setIsProcessing(false);
     }
   };
 
   const handleDeletePayment = async () => {
-    if (!selectedPayment || !profile) return;
+    if (!selectedPayment) return;
     setIsProcessing(true);
     try {
       await deleteDoc(doc(db, 'recurringPayments', selectedPayment.id));
-      
-      import('@/lib/history').then(({ logActivity }) => {
-        logActivity(`<strong>${profile.displayName}</strong> eliminó el pago recurrente '${selectedPayment.title}'`, selectedPayment.ownerId, (selectedPayment as any).sharedWith || []);
-      });
-
       setIsDeleteModalOpen(false);
     } catch (error) {
       console.error(error);
-      alert("Error al eliminar el pago");
     } finally {
       setIsProcessing(false);
     }
@@ -408,587 +528,1025 @@ export default function RecurringPayments() {
 
   const days = Array.from({ length: 31 }, (_, i) => i + 1);
 
-  const handleAddCategory = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newCategoryName.trim() || !user) return;
-    try {
-      await addDoc(collection(db, 'financeCategories'), {
-        name: newCategoryName.trim(),
-        type: 'payment',
-        ownerId: user.uid
-      });
-      setNewCategoryName('');
-    } catch (error) {
-      console.error(error);
-    }
-  };
-
-  const handleDeleteCategory = async (id: string) => {
-    try {
-      await deleteDoc(doc(db, 'financeCategories', id));
-    } catch (error) {
-      console.error(error);
-    }
-  };
-
-  const handleEditCategory = async (id: string) => {
-    if (!editCategoryName.trim()) return;
-    try {
-      await updateDoc(doc(db, 'financeCategories', id), {
-        name: editCategoryName.trim()
-      });
-      setEditingCategoryId(null);
-      setEditCategoryName('');
-    } catch (error) {
-      console.error(error);
-    }
-  };
-
-  const startEditingCategory = (cat: CustomCategory) => {
-    setEditingCategoryId(cat.id);
-    setEditCategoryName(cat.name);
-  };
-
   if (loading || !user) {
     return (
       <main className={`container ${styles.main}`}>
-        <Spinner message="Cargando pagos..." />
+        <Spinner message="Cargando Pagos y Presupuesto..." />
       </main>
     );
   }
 
+  const filteredPayments = payments
+    .filter((p) => (filterDay === 'all' ? true : p.days.includes(filterDay)))
+    .filter((p) => {
+      const pScope: Scope =
+        p.scope || (p.sharedWith && p.sharedWith.length > 0 ? 'conjunto' : 'personal');
+      if (globalScope === 'mio') return p.ownerId === user.uid;
+      if (globalScope === 'conjunto') return pScope === 'conjunto';
+      if (globalScope === 'pareja' && partnerUid) return p.ownerId === partnerUid;
+      return true;
+    });
+
   return (
-    <main className={`container ${styles.main}`}>
+    <main className={`container ${styles.main}`} style={{ paddingBottom: '100px' }}>
       <header className={styles.appBar}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-          <Link href="/">
-            <Button variant="ghost" className={styles.iconBtn}>
-              <ArrowLeft size={24} />
-            </Button>
-          </Link>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <h1 className="text-headline-sm">Pagos Programados</h1>
-            {(paymentsSettings?.sharedWith && paymentsSettings.sharedWith.length > 0) && (
-              <AvatarGroup 
-                users={[
-                  usersMap[user?.uid || ''],
-                  ...paymentsSettings.sharedWith.map((uid: string) => usersMap[uid])
-                ].filter(Boolean) as any} 
-                size="sm" 
+            <Link href="/">
+              <Button variant="ghost" className={styles.iconBtn}>
+                <ArrowLeft size={24} />
+              </Button>
+            </Link>
+            <div>
+              <h1 className="text-headline-sm" style={{ margin: 0 }}>
+                Pagos y Presupuesto
+              </h1>
+              <p className="text-label-sm" style={{ color: 'var(--color-on-surface-variant)' }}>
+                Planilla Fijos · Pagos Esporádicos · Unificado
+              </p>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            {partner && (
+              <AvatarGroup
+                users={[usersMap[user.uid], usersMap[partner.uid]].filter(Boolean) as any}
+                size="sm"
               />
             )}
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => {
+                setEditingSporadicTx(null);
+                setIsQuickSporadicOpen(true);
+              }}
+            >
+              <Plus size={15} style={{ marginRight: '4px' }} /> Pago Extra
+            </Button>
           </div>
-        </div>
-        <div style={{ display: 'flex', gap: '4px' }}>
-          <Button variant="ghost" className={styles.iconBtn} onClick={openShareModal}>
-            <UserPlus size={20} color="var(--color-primary)" />
-          </Button>
         </div>
       </header>
 
-      {/* Formulario de Nuevo Pago */}
-      <Card className={styles.formCard}>
-        <h2 className="text-headline-sm" style={{ marginBottom: '16px' }}>Programar Pago</h2>
-        <form className={styles.formGroup} onSubmit={handleSavePayment}>
-          <Input 
-            label="Nombre del Pago" 
-            placeholder="Ej. Arriendo, Servicios..." 
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-          />
-          <Input 
-            label="Monto" 
-            placeholder="Ej. 1.500.000" 
-            type="text"
-            value={amount}
-            onChange={(e) => setAmount(formatInputCOP(e.target.value))}
-            required
-          />
-          
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-end' }}>
-            <div style={{ flex: 1 }}>
-              <label className="text-label-md" style={{ color: 'var(--color-on-surface)' }}>Categoría</label>
-              <select 
-                value={category} 
-                onChange={(e) => setCategory(e.target.value)}
+      {/* Filtro Global (Mío por defecto · Conjunto · Todo · Pareja) */}
+      <div style={{ marginBottom: '12px' }}>
+        <ScopeFilterBar />
+      </div>
+
+      {/* Selector de Mes y Corte Quincenal */}
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          gap: '8px',
+          marginBottom: '14px',
+          flexWrap: 'wrap',
+          backgroundColor: 'var(--color-surface-container-lowest)',
+          padding: '8px 12px',
+          borderRadius: '12px',
+          boxShadow: 'var(--shadow-level-1)',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <Button variant="ghost" className={styles.iconBtn} onClick={prevMonth}>
+            <ChevronLeft size={20} />
+          </Button>
+          <span
+            style={{
+              fontWeight: 700,
+              fontSize: '14px',
+              textTransform: 'capitalize',
+              minWidth: '120px',
+              textAlign: 'center',
+            }}
+          >
+            {monthLabel}
+          </span>
+          <Button variant="ghost" className={styles.iconBtn} onClick={nextMonth}>
+            <ChevronRight size={20} />
+          </Button>
+        </div>
+
+        <div
+          style={{
+            display: 'inline-flex',
+            background: 'var(--color-surface-container)',
+            borderRadius: '10px',
+            padding: '3px',
+            gap: '2px',
+          }}
+        >
+          {[
+            { id: 'all', label: 'Todos (Mes)' },
+            { id: 'q1', label: '1ª Qna (15)' },
+            { id: 'q2', label: '2ª Qna (30)' },
+          ].map((q) => {
+            const active = quincenaFilter === q.id;
+            return (
+              <button
+                key={q.id}
+                type="button"
+                onClick={() => setQuincenaFilter(q.id as 'all' | 'q1' | 'q2')}
                 style={{
-                  width: '100%',
-                  padding: '12px 16px',
-                  borderRadius: '12px',
-                  border: '1px solid var(--color-outline-variant)',
-                  backgroundColor: 'var(--color-surface-container-lowest)',
-                  color: 'var(--color-on-surface)',
-                  fontFamily: 'inherit',
-                  fontSize: '16px',
-                  appearance: 'none',
-                  marginTop: '4px'
+                  padding: '6px 10px',
+                  borderRadius: '8px',
+                  fontSize: '12px',
+                  fontWeight: active ? 600 : 500,
+                  backgroundColor: active
+                    ? 'var(--color-surface-container-lowest)'
+                    : 'transparent',
+                  color: active
+                    ? 'var(--color-primary)'
+                    : 'var(--color-on-surface-variant)',
+                  boxShadow: active ? 'var(--shadow-level-1)' : 'none',
                 }}
               >
-                {combinedCategories.map(cat => (
-                  <option key={cat} value={cat}>{cat}</option>
-                ))}
-              </select>
-            </div>
-            <Button variant="secondary" className={styles.iconBtn} onClick={() => setIsCategoriesModalOpen(true)} type="button" aria-label="Gestionar categorías">
-              <Settings size={20} />
-            </Button>
-          </div>
-
-          <Input 
-            label="Comentario (Opcional)" 
-            placeholder="Ej. Transferir a la cuenta de ahorros..." 
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-          />
-          
-          <div className={styles.frequencyGroup}>
-            <label className="text-label-md" style={{ color: 'var(--color-on-surface)' }}>
-              Días de Cobro (Se repetirá cada mes)
-            </label>
-            <div className={styles.dayGrid}>
-              {days.map(day => (
-                <button
-                  key={day}
-                  type="button"
-                  className={`${styles.dayButton} ${selectedDays.includes(day) ? styles.daySelected : ''}`}
-                  onClick={() => toggleDay(day)}
-                >
-                  {day}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '16px' }}>
-            <input 
-              type="checkbox" 
-              id="sharePayment" 
-              checked={isShared} 
-              onChange={(e) => setIsShared(e.target.checked)} 
-              style={{ width: '18px', height: '18px' }}
-            />
-            <label htmlFor="sharePayment" className="text-body-md" style={{ color: 'var(--color-on-surface)' }}>
-              Compartir este pago
-            </label>
-          </div>
-
-          {isShared && (
-            <div style={{ marginTop: '8px', marginBottom: '8px' }}>
-              <UserEmailAutocomplete value={createShareEmail} onChange={setCreateShareEmail} />
-              {paymentsSettings?.sharedWith?.length > 0 ? (
-                <p className="text-label-sm" style={{ color: 'var(--color-primary)', marginTop: '8px' }}>
-                  Ya compartes pagos con {paymentsSettings.sharedWith.length} persona(s). Escribe un correo solo si quieres añadir a alguien nuevo.
-                </p>
-              ) : (
-                <p className="text-label-sm" style={{ color: 'var(--color-warning)', marginTop: '8px' }}>
-                  Requerido: Escribe el correo del usuario con quien deseas compartir.
-                </p>
-              )}
-            </div>
-          )}
-
-          <Button type="submit" variant="primary" style={{ marginTop: '16px' }}>
-            Guardar Pago Programado
-          </Button>
-        </form>
-      </Card>
-
-      {/* Lista de Obligaciones */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginTop: '16px' }}>
-        <h2 className="text-headline-sm">Tus Obligaciones</h2>
-        {payments.length > 0 && (
-          <div style={{ textAlign: 'right' }}>
-            <p className="text-label-sm" style={{ color: 'var(--color-on-surface-variant)' }}>Total {filterVisibility === 'all' ? '' : filterVisibility === 'personal' ? 'Personal' : 'Compartido'}</p>
-            <p className="text-headline-sm" style={{ color: 'var(--color-primary)' }}>
-              {formatCOP(
-                payments
-                  .filter(p => {
-                    if (filterVisibility === 'personal') return p.ownerId === user.uid && (!p.sharedWith || p.sharedWith.length === 0);
-                    if (filterVisibility === 'shared') return p.ownerId !== user.uid || (p.sharedWith && p.sharedWith.length > 0);
-                    return true;
-                  })
-                  .filter(p => filterDay === 'all' ? true : p.days.includes(filterDay))
-                  .reduce((sum, p) => sum + (Number(p.amount) * (filterDay === 'all' ? p.days.length : 1)), 0)
-              )}
-            </p>
-          </div>
-        )}
-      </div>
-
-      <div style={{ display: 'flex', gap: '8px', marginTop: '16px', overflowX: 'auto', paddingBottom: '8px' }}>
-        <Button 
-          variant={filterVisibility === 'all' ? 'primary' : 'secondary'} 
-          onClick={() => setFilterVisibility('all')}
-          style={{ borderRadius: '20px', padding: '4px 12px', fontSize: '14px', flex: '0 0 auto', minHeight: 'auto' }}
-        >
-          Todos
-        </Button>
-        <Button 
-          variant={filterVisibility === 'personal' ? 'primary' : 'secondary'} 
-          onClick={() => setFilterVisibility('personal')}
-          style={{ borderRadius: '20px', padding: '4px 12px', fontSize: '14px', flex: '0 0 auto', minHeight: 'auto' }}
-        >
-          Personales
-        </Button>
-        <Button 
-          variant={filterVisibility === 'shared' ? 'primary' : 'secondary'} 
-          onClick={() => setFilterVisibility('shared')}
-          style={{ borderRadius: '20px', padding: '4px 12px', fontSize: '14px', flex: '0 0 auto', minHeight: 'auto' }}
-        >
-          Compartidos
-        </Button>
-      </div>
-
-      {payments.length > 0 && (
-        <div className={styles.filterBar}>
-          <button 
-            className={`${styles.filterPill} ${filterDay === 'all' ? styles.filterPillActive : ''}`}
-            onClick={() => setFilterDay('all')}
-          >
-            Todos
-          </button>
-          {Array.from(new Set(payments.flatMap(p => p.days))).sort((a,b) => a - b).map(day => (
-            <button 
-              key={day}
-              className={`${styles.filterPill} ${filterDay === day ? styles.filterPillActive : ''}`}
-              onClick={() => setFilterDay(day)}
-            >
-              Día {day}
-            </button>
-          ))}
+                {q.label}
+              </button>
+            );
+          })}
         </div>
-      )}
+      </div>
 
-      <section className={styles.listSection}>
-        {payments.length === 0 ? (
-          <p className="text-body-sm text-center" style={{ color: 'var(--color-on-surface-variant)', marginTop: '16px' }}>No tienes pagos programados.</p>
-        ) : (
-          Object.entries(
-            (filterDay === 'all' ? payments : payments.filter(p => p.days.includes(filterDay)))
-              .filter(p => {
-                if (filterVisibility === 'personal') return p.ownerId === user.uid && (!p.sharedWith || p.sharedWith.length === 0);
-                if (filterVisibility === 'shared') return p.ownerId !== user.uid || (p.sharedWith && p.sharedWith.length > 0);
-                return true;
-              })
-              .reduce((acc, p) => {
-                const cat = p.category || 'Otros';
-                if (!acc[cat]) acc[cat] = [];
-                acc[cat].push(p);
-                return acc;
-              }, {} as Record<string, Payment[]>)
-          ).sort(([a], [b]) => a.localeCompare(b)).map(([catName, groupPayments]) => (
-            <div key={catName} style={{ marginBottom: '16px' }}>
-              <h3 className="text-label-md" style={{ color: 'var(--color-primary)', marginBottom: '8px', paddingLeft: '4px' }}>
-                {catName}
-              </h3>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                {groupPayments.map(payment => (
-                  <Card key={payment.id} interactive className={styles.paymentCard} style={{ marginBottom: 0 }}>
-                    <div className={styles.paymentIcon}>
-                      <Calendar size={24} color="var(--color-primary)" />
+      {/* Pestañas principales de Pagos */}
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(4, 1fr)',
+          gap: '6px',
+          marginBottom: '16px',
+        }}
+      >
+        {[
+          { id: 'planilla', label: 'Presupuesto Fijo', icon: <Table2 size={15} /> },
+          { id: 'esporadicos', label: 'Pagos Extras', icon: <Receipt size={15} /> },
+          { id: 'unificado', label: 'Unificado', icon: <Layers size={15} /> },
+          { id: 'plantillas', label: 'Programar Fijos', icon: <Calendar size={15} /> },
+        ].map((t) => {
+          const active = activeTab === t.id;
+          return (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => setActiveTab(t.id as PagosTab)}
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '4px',
+                padding: '10px 4px',
+                borderRadius: '12px',
+                fontSize: '11px',
+                fontWeight: active ? 700 : 500,
+                backgroundColor: active
+                  ? 'var(--color-primary-container)'
+                  : 'var(--color-surface-container-lowest)',
+                color: active ? 'var(--color-primary-dark)' : 'var(--color-on-surface-variant)',
+                border: active
+                  ? '1.5px solid var(--color-primary)'
+                  : '1px solid var(--color-outline-variant)',
+              }}
+            >
+              {t.icon}
+              <span>{t.label}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* =================================================================== */}
+      {/* TAB 1: PLANILLA DE PRESUPUESTO FIJO VS VARIABLES (LIMPIA)           */}
+      {/* =================================================================== */}
+      {activeTab === 'planilla' && (
+        <section style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <FixedCashflowWorksheet
+            currentDate={currentDate}
+            quincenaFilter={quincenaFilter}
+            onChangeQuincenaFilter={setQuincenaFilter}
+            periodTransactions={periodTransactions}
+            recurringPayments={payments}
+          />
+
+          {/* Topes opcionales por Categoría / #Tag */}
+          <Card style={{ padding: '16px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Target size={18} color="var(--color-primary)" />
+                <div>
+                  <h4 style={{ fontSize: '14px', fontWeight: 600, margin: 0 }}>
+                    Topes de Alerta por Categoría / #Tag
+                  </h4>
+                  <p style={{ fontSize: '11px', color: 'var(--color-on-surface-variant)', margin: 0 }}>
+                    Alertas automáticas al 80% y 100% en tus pagos esporádicos
+                  </p>
+                </div>
+              </div>
+              <Button variant="secondary" size="sm" onClick={() => setIsBudgetModalOpen(true)}>
+                {currentBudgetDoc ? 'Editar Topes' : '+ Configurar'}
+              </Button>
+            </div>
+
+            {currentBudgetStatus && currentBudgetStatus.lineStatuses.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '12px' }}>
+                {currentBudgetStatus.lineStatuses.map((line) => (
+                  <div
+                    key={line.id}
+                    style={{
+                      padding: '8px 10px',
+                      borderRadius: '8px',
+                      backgroundColor: 'var(--color-surface-container-low)',
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        fontSize: '12px',
+                        fontWeight: 600,
+                        marginBottom: '4px',
+                      }}
+                    >
+                      <span>{line.targetType === 'tag' ? `#${line.targetName}` : line.targetName}</span>
+                      <span style={{ fontVariantNumeric: 'tabular-nums' }}>
+                        {formatCOP(line.spent)} / {formatCOP(line.budgeted)} ({line.percentage}%)
+                      </span>
                     </div>
-                    <div className={styles.paymentInfo} style={{ flex: 1 }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                        <h3 className="text-body-lg" style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px' }}>
-                          {payment.title}
-                          {(payment.sharedWith && payment.sharedWith.length > 0) || payment.ownerId !== user?.uid ? (
-                            <div style={{ marginLeft: '4px' }}>
-                              <AvatarGroup 
-                                users={[
-                                  usersMap[payment.ownerId],
-                                  ...(payment.sharedWith || []).map((uid: string) => usersMap[uid])
-                                ].filter(Boolean) as any} 
-                                size="sm" 
-                              />
-                            </div>
-                          ) : (
-                            <Lock size={16} color="var(--color-on-surface-variant)" />
-                          )}
-                        </h3>
-                        {paidPaymentIds.has(payment.id) && (
-                          <span style={{ 
-                            fontSize: '12px', 
-                            backgroundColor: 'var(--color-success)', 
-                            color: '#FFFFFF', 
-                            padding: '2px 8px', 
-                            borderRadius: '12px',
-                            fontWeight: 500,
-                            whiteSpace: 'nowrap'
-                          }}>
-                            ✅ Pagado
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-label-sm" style={{ color: 'var(--color-warning)' }}>
-                        Se cobra los días: {payment.days.sort((a,b) => a - b).join(', ')} de cada mes
-                      </p>
-                      {payment.description && (
-                        <p className="text-body-sm" style={{ color: 'var(--color-on-surface-variant)', marginTop: '4px' }}>
-                          {payment.description}
-                        </p>
-                      )}
-                      <div style={{ marginTop: '4px' }}>
-                        <span className="text-headline-sm" style={{ color: paidPaymentIds.has(payment.id) ? 'var(--color-success)' : 'inherit' }}>
-                          {formatCOP(Number(payment.amount) * (filterDay === 'all' ? payment.days.length : 1))}
-                        </span>
-                        {filterDay === 'all' && payment.days.length > 1 && (
-                          <span className="text-label-sm" style={{ color: 'var(--color-on-surface-variant)', marginLeft: '8px' }}>
-                            ({formatCOP(Number(payment.amount))} c/u)
-                          </span>
-                        )}
-                      </div>
+                    <div
+                      style={{
+                        width: '100%',
+                        height: '6px',
+                        borderRadius: '999px',
+                        backgroundColor: 'var(--color-surface-container)',
+                        overflow: 'hidden',
+                      }}
+                    >
+                      <div
+                        style={{
+                          width: `${Math.min(100, line.percentage)}%`,
+                          height: '100%',
+                          backgroundColor:
+                            line.statusColor === 'red'
+                              ? 'var(--color-error)'
+                              : line.statusColor === 'yellow'
+                              ? 'var(--color-warning)'
+                              : 'var(--color-success)',
+                        }}
+                      />
                     </div>
-                    <div style={{ display: 'flex', flexDirection: 'row', gap: '8px' }}>
-                      {(payment.ownerId === user?.uid || (payment.sharedWith && payment.sharedWith.includes(user?.uid || ''))) && (
-                        <>
-                          <Button variant="ghost" onClick={(e) => { e.stopPropagation(); openEditModal(payment); }} aria-label="Editar" style={{ padding: '8px', height: 'auto', minWidth: 'auto' }}>
-                            <Pencil size={20} color="var(--color-primary)" />
-                          </Button>
-                          <Button variant="ghost" onClick={(e) => { e.stopPropagation(); openDeleteModal(payment); }} aria-label="Eliminar" style={{ padding: '8px', height: 'auto', minWidth: 'auto' }}>
-                            <Trash2 size={20} color="var(--color-error)" />
-                          </Button>
-                        </>
-                      )}
-                    </div>
-                  </Card>
+                  </div>
                 ))}
               </div>
-            </div>
-          ))
-        )}
-      </section>
+            )}
+          </Card>
+        </section>
+      )}
 
-      {/* Share Modal */}
-      <Modal isOpen={isShareModalOpen} onClose={() => !isProcessing && setIsShareModalOpen(false)} title="Compartir Pagos">
-        <div style={{ marginBottom: '16px', marginTop: '8px' }}>
-          <p className="text-body-sm" style={{ color: 'var(--color-on-surface-variant)' }}>
-            Comparte todo el módulo de <strong>Pagos Programados</strong> con alguien más.
-          </p>
-        </div>
-        <form onSubmit={handleSharePayment}>
-          <div style={{ marginBottom: '24px' }}>
-            <UserEmailAutocomplete 
-              value={shareEmail}
-              onChange={(val) => setShareEmail(val)}
-              autoFocus
-            />
+      {/* =================================================================== */}
+      {/* TAB 2: LISTA GENERAL DE PAGOS ESPORÁDICOS / EXTRAS (FUERA DE FIJOS) */}
+      {/* =================================================================== */}
+      {activeTab === 'esporadicos' && (
+        <section style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          <Card
+            style={{
+              padding: '16px',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+            }}
+          >
+            <div>
+              <span className="text-label-sm" style={{ color: 'var(--color-on-surface-variant)' }}>
+                Total Pagos Esporádicos / Extras ({globalScope.toUpperCase()})
+              </span>
+              <div
+                style={{
+                  fontSize: '20px',
+                  fontWeight: 700,
+                  color: 'var(--color-error)',
+                  fontVariantNumeric: 'tabular-nums',
+                  marginTop: '2px',
+                }}
+              >
+                {formatCOP(totalUnifiedSporadic)}
+              </div>
+              <span style={{ fontSize: '11px', color: 'var(--color-on-surface-variant)' }}>
+                {sporadicExpenses.length} pagos fuera de la planilla fija en este periodo
+              </span>
+            </div>
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => {
+                setEditingSporadicTx(null);
+                setIsQuickSporadicOpen(true);
+              }}
+            >
+              + Registrar Pago
+            </Button>
+          </Card>
+
+          {sporadicExpenses.length === 0 ? (
+            <Card style={{ textAlign: 'center', padding: '32px 16px' }}>
+              <Receipt size={32} color="var(--color-on-surface-variant)" style={{ margin: '0 auto 8px' }} />
+              <h4 className="text-body-lg" style={{ fontWeight: 600 }}>
+                Sin pagos esporádicos en este corte
+              </h4>
+              <p className="text-body-sm" style={{ color: 'var(--color-on-surface-variant)', marginTop: '4px' }}>
+                Aquí verás todos los gastos o pagos extras que hagas por fuera de las obligaciones fijas del presupuesto.
+              </p>
+            </Card>
+          ) : (
+            <Card style={{ padding: '8px 16px' }}>
+              {sporadicExpenses.map((tx, idx) => {
+                const d = tx.createdAt?.toDate ? tx.createdAt.toDate() : new Date();
+                const pm = paymentMethods.find((m) => m.id === tx.paymentMethodId);
+                const isLast = idx === sporadicExpenses.length - 1;
+                return (
+                  <div
+                    key={tx.id}
+                    style={{
+                      padding: '12px 0',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      gap: '12px',
+                      borderBottom: isLast ? 'none' : '1px solid var(--color-surface-container)',
+                      cursor: 'pointer',
+                    }}
+                    onClick={() => {
+                      setEditingSporadicTx(tx);
+                      setIsQuickSporadicOpen(true);
+                    }}
+                  >
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', minWidth: 0, flex: 1 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span
+                          style={{
+                            fontWeight: 500,
+                            fontSize: '14px',
+                            whiteSpace: 'nowrap',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                          }}
+                        >
+                          {tx.place || tx.title || tx.description || tx.category}
+                        </span>
+                        <span
+                          style={{
+                            fontSize: '10px',
+                            padding: '2px 8px',
+                            borderRadius: '999px',
+                            backgroundColor: 'var(--color-surface-container-low)',
+                            color: 'var(--color-on-surface-variant)',
+                            fontWeight: 600,
+                            flexShrink: 0,
+                          }}
+                        >
+                          {tx.category}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: '11px', color: 'var(--color-on-surface-variant)', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                        <span>{d.toLocaleDateString('es-CO', { day: '2-digit', month: 'short' })}</span>
+                        <span>• {tx.paidByName || tx.ownerName || 'Yo'}</span>
+                        {(pm || tx.paymentMethodAlias) && (
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
+                            <CreditCard size={11} /> {pm?.alias || tx.paymentMethodAlias}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div
+                      style={{
+                        textAlign: 'right',
+                        fontWeight: 600,
+                        color: 'var(--color-error)',
+                        fontSize: '14px',
+                        fontVariantNumeric: 'tabular-nums',
+                        flexShrink: 0,
+                      }}
+                    >
+                      -{formatCOP(Number(tx.amount || 0))}
+                    </div>
+                  </div>
+                );
+              })}
+            </Card>
+          )}
+        </section>
+      )}
+
+      {/* =================================================================== */}
+      {/* TAB 3: VISTA GENERAL UNIFICADA (PRESUPUESTO FIJO + PAGOS EXTRAS)    */}
+      {/* =================================================================== */}
+      {activeTab === 'unificado' && (
+        <section style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          <Card style={{ padding: '16px' }}>
+            <span className="text-label-sm" style={{ color: 'var(--color-on-surface-variant)' }}>
+              RESUMEN UNIFICADO: FIJOS + PAGOS ESPORÁDICOS ({globalScope.toUpperCase()})
+            </span>
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(3, 1fr)',
+                gap: '8px',
+                marginTop: '12px',
+                padding: '12px',
+                borderRadius: '12px',
+                backgroundColor: 'var(--color-surface-container-low)',
+              }}
+            >
+              <div>
+                <div style={{ fontSize: '11px', color: 'var(--color-on-surface-variant)' }}>
+                  Presupuesto Fijo
+                </div>
+                <div
+                  style={{
+                    fontSize: '14px',
+                    fontWeight: 700,
+                    marginTop: '2px',
+                    fontVariantNumeric: 'tabular-nums',
+                  }}
+                >
+                  {formatCOP(totalUnifiedFixed)}
+                </div>
+              </div>
+              <div
+                style={{
+                  borderLeft: '1px solid var(--color-outline-variant)',
+                  paddingLeft: '10px',
+                }}
+              >
+                <div style={{ fontSize: '11px', color: 'var(--color-on-surface-variant)' }}>
+                  Esporádicos
+                </div>
+                <div
+                  style={{
+                    fontSize: '14px',
+                    fontWeight: 700,
+                    marginTop: '2px',
+                    color: 'var(--color-error)',
+                    fontVariantNumeric: 'tabular-nums',
+                  }}
+                >
+                  {formatCOP(totalUnifiedSporadic)}
+                </div>
+              </div>
+              <div
+                style={{
+                  borderLeft: '1px solid var(--color-outline-variant)',
+                  paddingLeft: '10px',
+                }}
+              >
+                <div style={{ fontSize: '11px', color: 'var(--color-on-surface-variant)' }}>
+                  Gran Total
+                </div>
+                <div
+                  style={{
+                    fontSize: '14px',
+                    fontWeight: 700,
+                    marginTop: '2px',
+                    color: 'var(--color-primary)',
+                    fontVariantNumeric: 'tabular-nums',
+                  }}
+                >
+                  {formatCOP(totalUnifiedFixed + totalUnifiedSporadic)}
+                </div>
+              </div>
+            </div>
+          </Card>
+
+          {unifiedItems.length === 0 ? (
+            <Card style={{ textAlign: 'center', padding: '28px 16px' }}>
+              <p className="text-body-sm" style={{ color: 'var(--color-on-surface-variant)' }}>
+                No hay obligaciones fijas ni pagos esporádicos registrados en este corte.
+              </p>
+            </Card>
+          ) : (
+            <Card style={{ padding: '8px 16px' }}>
+              {unifiedItems.map((item, idx) => {
+                const isFijo = item.kind === 'fijo';
+                const isDiscount = item.amount < 0;
+                const isLast = idx === unifiedItems.length - 1;
+                return (
+                  <div
+                    key={item.id}
+                    style={{
+                      padding: '12px 0',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      gap: '12px',
+                      borderBottom: isLast ? 'none' : '1px solid var(--color-surface-container)',
+                    }}
+                  >
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span
+                          style={{
+                            fontSize: '10px',
+                            fontWeight: 600,
+                            padding: '2px 8px',
+                            borderRadius: '999px',
+                            backgroundColor: isFijo
+                              ? 'var(--color-primary-container)'
+                              : 'rgba(239, 68, 68, 0.1)',
+                            color: isFijo ? 'var(--color-primary-dark)' : 'var(--color-error)',
+                            flexShrink: 0,
+                          }}
+                        >
+                          {isFijo ? 'Fijo' : 'Esporádico'}
+                        </span>
+                        <span
+                          style={{
+                            fontWeight: 500,
+                            fontSize: '14px',
+                            textDecoration: isFijo && item.paid ? 'line-through' : 'none',
+                            whiteSpace: 'nowrap',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                          }}
+                        >
+                          {item.title}
+                        </span>
+                      </div>
+                      <div
+                        style={{
+                          fontSize: '11px',
+                          color: 'var(--color-on-surface-variant)',
+                          marginTop: '2px',
+                        }}
+                      >
+                        {item.ownerName} • {item.categoryOrStatus} • {item.dateLabel}
+                      </div>
+                    </div>
+
+                    <div
+                      style={{
+                        fontWeight: 600,
+                        fontSize: '14px',
+                        fontVariantNumeric: 'tabular-nums',
+                        flexShrink: 0,
+                        color: isDiscount
+                          ? 'var(--color-success)'
+                          : isFijo
+                          ? 'var(--color-on-surface)'
+                          : 'var(--color-error)',
+                      }}
+                    >
+                      {formatCOP(item.amount)}
+                    </div>
+                  </div>
+                );
+              })}
+            </Card>
+          )}
+        </section>
+      )}
+
+      {/* =================================================================== */}
+      {/* TAB 4: PLANTILLAS DE PROGRAMACIÓN QUINCENAL / MENSUAL               */}
+      {/* =================================================================== */}
+      {activeTab === 'plantillas' && (
+        <section>
+          <Card className={styles.formCard}>
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: '1fr 1fr',
+                background: 'var(--color-surface-container)',
+                padding: '4px',
+                borderRadius: '10px',
+                marginBottom: '14px',
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => {
+                  setFlowType('expense');
+                  setCategory(EXPENSE_RECURRING_CATS[0]);
+                }}
+                style={{
+                  padding: '8px',
+                  borderRadius: '8px',
+                  fontWeight: 600,
+                  fontSize: '13px',
+                  backgroundColor: flowType === 'expense' ? 'var(--color-error)' : 'transparent',
+                  color: flowType === 'expense' ? '#FFF' : 'var(--color-on-surface-variant)',
+                }}
+              >
+                Obligación / Gasto Fijo
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setFlowType('income');
+                  setCategory(INCOME_RECURRING_CATS[0]);
+                }}
+                style={{
+                  padding: '8px',
+                  borderRadius: '8px',
+                  fontWeight: 600,
+                  fontSize: '13px',
+                  backgroundColor: flowType === 'income' ? 'var(--color-success)' : 'transparent',
+                  color: flowType === 'income' ? '#FFF' : 'var(--color-on-surface-variant)',
+                }}
+              >
+                Ingreso Fijo Quincenal
+              </button>
+            </div>
+
+            <form className={styles.formGroup} onSubmit={handleSavePayment}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1.3fr 1fr', gap: '10px' }}>
+                <Input
+                  label={flowType === 'income' ? 'Concepto (Ej. Quincena)' : 'Nombre Obligación'}
+                  placeholder={flowType === 'income' ? 'Ej. Sueldo Quincenal' : 'Ej. Arriendo, Addi'}
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  required
+                />
+                <Input
+                  label="Valor por Corte ($)"
+                  placeholder="Ej. 1.500.000"
+                  type="text"
+                  value={amount}
+                  onChange={(e) => setAmount(formatInputCOP(e.target.value))}
+                  required
+                />
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                <div>
+                  <label className="text-label-sm">Categoría</label>
+                  <select
+                    value={category}
+                    onChange={(e) => setCategory(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '10px 12px',
+                      borderRadius: '10px',
+                      border: '1px solid var(--color-outline-variant)',
+                      backgroundColor: 'var(--color-surface-container-lowest)',
+                      fontSize: '14px',
+                      marginTop: '4px',
+                    }}
+                  >
+                    {(flowType === 'income' ? INCOME_RECURRING_CATS : EXPENSE_RECURRING_CATS).map(
+                      (cat) => (
+                        <option key={cat} value={cat}>
+                          {cat}
+                        </option>
+                      )
+                    )}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-label-sm">Ámbito</label>
+                  <select
+                    value={scope}
+                    onChange={(e) => setScope(e.target.value as Scope)}
+                    style={{
+                      width: '100%',
+                      padding: '10px 12px',
+                      borderRadius: '10px',
+                      border: '1px solid var(--color-outline-variant)',
+                      backgroundColor: 'var(--color-surface-container-lowest)',
+                      fontSize: '14px',
+                      marginTop: '4px',
+                    }}
+                  >
+                    <option value="personal">Personal (Mío)</option>
+                    <option value="conjunto">Conjunto (Hogar)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className={styles.frequencyGroup}>
+                <div
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    marginBottom: '6px',
+                  }}
+                >
+                  <label className="text-label-sm" style={{ color: 'var(--color-on-surface)' }}>
+                    Días de corte (15 y 30 para Quincenal)
+                  </label>
+                  <button
+                    type="button"
+                    onClick={applyQuickQuincena}
+                    style={{
+                      fontSize: '11px',
+                      color: 'var(--color-primary)',
+                      fontWeight: 600,
+                    }}
+                  >
+                    Marcar Quincena (15 y 30)
+                  </button>
+                </div>
+                <div className={styles.dayGrid}>
+                  {days.map((day) => (
+                    <button
+                      key={day}
+                      type="button"
+                      className={`${styles.dayButton} ${
+                        selectedDays.includes(day) ? styles.daySelected : ''
+                      }`}
+                      onClick={() => toggleDay(day)}
+                    >
+                      {day}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <Button type="submit" variant="primary" style={{ marginTop: '12px' }}>
+                Guardar Plantilla {flowType === 'income' ? 'de Ingreso' : 'de Obligación'}
+              </Button>
+            </form>
+          </Card>
+
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'flex-end',
+              marginTop: '20px',
+            }}
+          >
+            <h2 className="text-headline-sm">Plantillas Fijas Configuradas</h2>
           </div>
-          <div style={{ display: 'flex', gap: '12px' }}>
-            <Button type="button" variant="ghost" fullWidth onClick={() => setIsShareModalOpen(false)} disabled={isProcessing}>
+
+          <section className={styles.listSection} style={{ marginTop: '12px' }}>
+            {filteredPayments.length === 0 ? (
+              <p
+                className="text-body-sm text-center"
+                style={{ color: 'var(--color-on-surface-variant)', marginTop: '16px' }}
+              >
+                No tienes plantillas programadas en esta vista.
+              </p>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                {filteredPayments.map((payment) => {
+                  const isIncome = payment.flowType === 'income';
+                  const isConfirmed = paidPaymentIds.has(payment.id);
+                  const occurrencesCount = Math.max(1, payment.days?.length || 1);
+                  const monthlyWeighted = Number(payment.amount || 0) * occurrencesCount;
+
+                  return (
+                    <Card key={payment.id} className={styles.paymentCard} style={{ marginBottom: 0 }}>
+                      <div className={styles.paymentIcon}>
+                        {isIncome ? (
+                          <TrendingUp size={22} color="var(--color-success)" />
+                        ) : (
+                          <Calendar size={22} color="var(--color-primary)" />
+                        )}
+                      </div>
+                      <div className={styles.paymentInfo} style={{ flex: 1 }}>
+                        <div
+                          style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            gap: '6px',
+                          }}
+                        >
+                          <h3 className="text-body-lg" style={{ fontWeight: 600 }}>
+                            {payment.title}
+                          </h3>
+                          {isConfirmed && (
+                            <span
+                              style={{
+                                fontSize: '11px',
+                                backgroundColor: 'var(--color-success)',
+                                color: '#FFFFFF',
+                                padding: '2px 8px',
+                                borderRadius: '12px',
+                                fontWeight: 600,
+                              }}
+                            >
+                              Confirmado este mes
+                            </span>
+                          )}
+                        </div>
+                        <p
+                          className="text-label-sm"
+                          style={{ color: 'var(--color-on-surface-variant)' }}
+                        >
+                          {isIncome ? 'Ingreso Fijo' : 'Gasto Fijo'} • Días:{' '}
+                          {payment.days.sort((a, b) => a - b).join(', ')} • Ponderado Mes:{' '}
+                          <strong>{formatCOP(monthlyWeighted)}</strong>
+                        </p>
+                        <div
+                          style={{
+                            marginTop: '4px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '8px',
+                          }}
+                        >
+                          <span
+                            className="text-headline-sm"
+                            style={{ color: isIncome ? 'var(--color-success)' : 'inherit' }}
+                          >
+                            {isIncome ? '+' : ''}
+                            {formatCOP(Number(payment.amount))}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setConfirmingItem(payment);
+                              setConfirmAdjustedAmount(formatInputCOP(String(payment.amount)));
+                            }}
+                            style={{
+                              padding: '4px 10px',
+                              borderRadius: '8px',
+                              fontSize: '11px',
+                              fontWeight: 600,
+                              backgroundColor: 'var(--color-primary-container)',
+                              color: 'var(--color-primary-dark)',
+                            }}
+                          >
+                            Confirmar / Ajustar
+                          </button>
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', gap: '4px' }}>
+                        <Button
+                          variant="ghost"
+                          onClick={() => openEditModal(payment)}
+                          aria-label="Editar"
+                          style={{ padding: '6px', height: 'auto', minWidth: 'auto' }}
+                        >
+                          <Pencil size={18} color="var(--color-primary)" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          onClick={() => {
+                            setSelectedPayment(payment);
+                            setIsDeleteModalOpen(true);
+                          }}
+                          aria-label="Eliminar"
+                          style={{ padding: '6px', height: 'auto', minWidth: 'auto' }}
+                        >
+                          <Trash2 size={18} color="var(--color-error)" />
+                        </Button>
+                      </div>
+                    </Card>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+        </section>
+      )}
+
+      {/* Modal Rápido para Registrar Pago Esporádico / Extra */}
+      <QuickMovementModal
+        isOpen={isQuickSporadicOpen}
+        onClose={() => {
+          setIsQuickSporadicOpen(false);
+          setEditingSporadicTx(null);
+        }}
+        initialType="expense"
+        editingTransaction={editingSporadicTx}
+        knownTransactions={transactions}
+        recurringPayments={payments}
+        activeBudgets={budgets}
+      />
+
+      {/* Modal de Topes por Categoría / #Tag */}
+      <BudgetManagerModal
+        isOpen={isBudgetModalOpen}
+        onClose={() => setIsBudgetModalOpen(false)}
+        currentDate={currentDate}
+        existingBudget={currentBudgetDoc}
+        allBudgets={budgets}
+      />
+
+      {/* Confirm & Adjust Modal (RF-05) */}
+      <Modal
+        isOpen={Boolean(confirmingItem)}
+        onClose={() => setConfirmingItem(null)}
+        title={`Confirmar ${confirmingItem?.title || ''}`}
+      >
+        <form
+          onSubmit={handleConfirmOccurrence}
+          style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginTop: '8px' }}
+        >
+          <p className="text-body-sm" style={{ color: 'var(--color-on-surface-variant)' }}>
+            Si este corte llegó por un valor distinto al habitual, ajústalo antes de registrarlo.
+          </p>
+          <Input
+            label="Monto real recibido / pagado ($)"
+            value={confirmAdjustedAmount}
+            onChange={(e) => setConfirmAdjustedAmount(formatInputCOP(e.target.value))}
+            required
+          />
+          <div style={{ display: 'flex', gap: '10px' }}>
+            <Button type="button" variant="ghost" fullWidth onClick={() => setConfirmingItem(null)}>
               Cancelar
             </Button>
-            <Button type="submit" variant="primary" fullWidth disabled={!shareEmail.trim() || isProcessing}>
-              {isProcessing ? 'Buscando...' : 'Compartir'}
+            <Button type="submit" variant="primary" fullWidth disabled={isConfirming}>
+              {isConfirming ? 'Registrando...' : 'Confirmar'}
             </Button>
           </div>
         </form>
       </Modal>
 
       {/* Delete Modal */}
-      <Modal isOpen={isDeleteModalOpen} onClose={() => !isProcessing && setIsDeleteModalOpen(false)} title="Eliminar Pago">
-        <div style={{ marginBottom: '24px', marginTop: '8px' }}>
+      <Modal
+        isOpen={isDeleteModalOpen}
+        onClose={() => !isProcessing && setIsDeleteModalOpen(false)}
+        title="Eliminar Plantilla"
+      >
+        <div style={{ marginBottom: '20px', marginTop: '8px' }}>
           <p className="text-body-md" style={{ color: 'var(--color-on-surface-variant)' }}>
-            ¿Estás seguro de que deseas eliminar el pago recurrente <strong>{selectedPayment?.title}</strong>?
+            ¿Deseas eliminar <strong>{selectedPayment?.title}</strong>?
           </p>
         </div>
         <div style={{ display: 'flex', gap: '12px' }}>
-          <Button type="button" variant="ghost" fullWidth onClick={() => setIsDeleteModalOpen(false)} disabled={isProcessing}>
+          <Button
+            type="button"
+            variant="ghost"
+            fullWidth
+            onClick={() => setIsDeleteModalOpen(false)}
+            disabled={isProcessing}
+          >
             Cancelar
           </Button>
-          <Button type="button" variant="danger" fullWidth onClick={handleDeletePayment} disabled={isProcessing}>
+          <Button
+            type="button"
+            variant="danger"
+            fullWidth
+            onClick={handleDeletePayment}
+            disabled={isProcessing}
+          >
             {isProcessing ? 'Eliminando...' : 'Sí, eliminar'}
           </Button>
         </div>
       </Modal>
 
       {/* Edit Modal */}
-      <Modal isOpen={isEditModalOpen} onClose={() => !isProcessing && setIsEditModalOpen(false)} title="Editar Pago Programado">
-        <form onSubmit={handleEditPayment} style={{ marginTop: '8px' }}>
-          <div style={{ marginBottom: '16px' }}>
-            <Input 
-              label="Nombre del Pago" 
-              placeholder="Ej. Arriendo, Servicios..." 
-              value={editTitle}
-              onChange={(e) => setEditTitle(e.target.value)}
-            />
-          </div>
-          <div style={{ marginBottom: '16px' }}>
-            <Input 
-              label="Monto" 
-              placeholder="Ej. 1.500.000" 
-              type="text"
-              value={editAmount}
-              onChange={(e) => setEditAmount(formatInputCOP(e.target.value))}
-              required
-            />
-          </div>
-          
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-end', marginBottom: '16px' }}>
-            <div style={{ flex: 1 }}>
-              <label className="text-label-md" style={{ color: 'var(--color-on-surface)' }}>
-                Categoría
-              </label>
-              <select 
-                value={editCategory} 
-                onChange={(e) => setEditCategory(e.target.value)}
-                style={{
-                  width: '100%',
-                  padding: '12px 16px',
-                  borderRadius: '12px',
-                  border: '1px solid var(--color-outline-variant)',
-                  backgroundColor: 'var(--color-surface-container-lowest)',
-                  color: 'var(--color-on-surface)',
-                  fontFamily: 'inherit',
-                  fontSize: '16px',
-                  appearance: 'none',
-                  marginTop: '4px'
-                }}
+      <Modal
+        isOpen={isEditModalOpen}
+        onClose={() => !isProcessing && setIsEditModalOpen(false)}
+        title="Editar Plantilla"
+      >
+        <form
+          onSubmit={handleEditPayment}
+          style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginTop: '8px' }}
+        >
+          <Input
+            label="Nombre"
+            value={editTitle}
+            onChange={(e) => setEditTitle(e.target.value)}
+            required
+          />
+          <Input
+            label="Monto ($)"
+            value={editAmount}
+            onChange={(e) => setEditAmount(formatInputCOP(e.target.value))}
+            required
+          />
+          <div className={styles.dayGrid}>
+            {days.map((day) => (
+              <button
+                key={day}
+                type="button"
+                className={`${styles.dayButton} ${
+                  editSelectedDays.includes(day) ? styles.daySelected : ''
+                }`}
+                onClick={() =>
+                  setEditSelectedDays((prev) =>
+                    prev.includes(day) ? prev.filter((d) => d !== day) : [...prev, day]
+                  )
+                }
               >
-                {combinedCategories.map(cat => (
-                  <option key={cat} value={cat}>{cat}</option>
-                ))}
-              </select>
-            </div>
-            <Button variant="secondary" className={styles.iconBtn} onClick={() => setIsCategoriesModalOpen(true)} type="button" aria-label="Gestionar categorías">
-              <Settings size={20} />
-            </Button>
+                {day}
+              </button>
+            ))}
           </div>
-
-          <div style={{ marginBottom: '16px' }}>
-            <Input 
-              label="Comentario (Opcional)" 
-              placeholder="Ej. Transferir a la cuenta de ahorros..." 
-              value={editDescription}
-              onChange={(e) => setEditDescription(e.target.value)}
-            />
-          </div>
-          
-          <div className={styles.frequencyGroup} style={{ marginBottom: '16px' }}>
-            <label className="text-label-md" style={{ color: 'var(--color-on-surface)' }}>
-              Días de Cobro (Se repetirá cada mes)
-            </label>
-            <div className={styles.dayGrid}>
-              {days.map(day => (
-                <button
-                  key={day}
-                  type="button"
-                  className={`${styles.dayButton} ${editSelectedDays.includes(day) ? styles.daySelected : ''}`}
-                  onClick={() => toggleEditDay(day)}
-                >
-                  {day}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
-            <input 
-              type="checkbox" 
-              id="editSharePayment" 
-              checked={editIsShared} 
-              onChange={(e) => setEditIsShared(e.target.checked)} 
-              style={{ width: '18px', height: '18px' }}
-            />
-            <label htmlFor="editSharePayment" className="text-body-md" style={{ color: 'var(--color-on-surface)' }}>
-              Compartir este pago
-            </label>
-          </div>
-
-          {editIsShared && (
-            <div style={{ marginTop: '8px', marginBottom: '24px' }}>
-              <UserEmailAutocomplete value={editShareEmail} onChange={setEditShareEmail} />
-              {paymentsSettings?.sharedWith?.length > 0 ? (
-                <p className="text-label-sm" style={{ color: 'var(--color-primary)', marginTop: '8px' }}>
-                  Ya compartes pagos con {paymentsSettings.sharedWith.length} persona(s). Escribe un correo solo si quieres añadir a alguien nuevo.
-                </p>
-              ) : (
-                <p className="text-label-sm" style={{ color: 'var(--color-warning)', marginTop: '8px' }}>
-                  Requerido: Escribe el correo del usuario con quien deseas compartir.
-                </p>
-              )}
-            </div>
-          )}
-
           <div style={{ display: 'flex', gap: '12px' }}>
-            <Button type="button" variant="ghost" fullWidth onClick={() => setIsEditModalOpen(false)} disabled={isProcessing}>
+            <Button
+              type="button"
+              variant="ghost"
+              fullWidth
+              onClick={() => setIsEditModalOpen(false)}
+              disabled={isProcessing}
+            >
               Cancelar
             </Button>
-            <Button type="submit" variant="primary" fullWidth disabled={isProcessing || !editTitle.trim() || !editAmount.trim()}>
-              {isProcessing ? 'Guardando...' : 'Guardar Cambios'}
+            <Button type="submit" variant="primary" fullWidth disabled={isProcessing}>
+              Guardar Cambios
             </Button>
           </div>
         </form>
       </Modal>
-
-      {/* Categorías Modal */}
-      <Modal isOpen={isCategoriesModalOpen} onClose={() => setIsCategoriesModalOpen(false)} title="Tus Categorías">
-        <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '16px', maxHeight: '60vh', overflowY: 'auto' }}>
-          <div>
-            <h4 className="text-label-md" style={{ color: 'var(--color-on-surface-variant)', marginBottom: '8px' }}>Categorías Personalizadas</h4>
-            {customCategories.length === 0 ? (
-              <p className="text-body-sm" style={{ color: 'var(--color-on-surface-variant)', fontStyle: 'italic' }}>
-                No has creado categorías personalizadas aún.
-              </p>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                {customCategories.map(cat => (
-                  <div key={cat.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px', backgroundColor: 'var(--color-surface-container-lowest)', borderRadius: '8px', border: '1px solid var(--color-outline-variant)' }}>
-                    {editingCategoryId === cat.id ? (
-                      <div style={{ display: 'flex', gap: '8px', flex: 1, alignItems: 'center' }}>
-                        <input 
-                          type="text" 
-                          value={editCategoryName} 
-                          onChange={(e) => setEditCategoryName(e.target.value)} 
-                          autoFocus
-                          style={{ flex: 1, padding: '4px 8px', borderRadius: '4px', border: '1px solid var(--color-outline-variant)', background: 'var(--color-surface)', color: 'var(--color-on-surface)' }}
-                        />
-                        <button onClick={() => handleEditCategory(cat.id)} style={{ color: 'var(--color-primary)', background: 'none', border: 'none', cursor: 'pointer', padding: '4px' }}>Guardar</button>
-                        <button onClick={() => setEditingCategoryId(null)} style={{ color: 'var(--color-on-surface-variant)', background: 'none', border: 'none', cursor: 'pointer', padding: '4px' }}>Cancelar</button>
-                      </div>
-                    ) : (
-                      <>
-                        <span className="text-body-md">{cat.name}</span>
-                        <div style={{ display: 'flex', gap: '4px' }}>
-                          <button 
-                            onClick={() => startEditingCategory(cat)}
-                            style={{ background: 'none', border: 'none', color: 'var(--color-on-surface-variant)', cursor: 'pointer', padding: '4px' }}
-                            aria-label="Editar categoría"
-                          >
-                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path></svg>
-                          </button>
-                          <button 
-                            onClick={() => handleDeleteCategory(cat.id)}
-                            style={{ background: 'none', border: 'none', color: 'var(--color-error)', cursor: 'pointer', padding: '4px' }}
-                            aria-label="Eliminar categoría"
-                          >
-                            <Trash2 size={16} />
-                          </button>
-                        </div>
-                      </>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <form onSubmit={handleAddCategory} style={{ display: 'flex', gap: '8px', marginTop: '16px', paddingTop: '16px', borderTop: '1px solid var(--color-outline-variant)' }}>
-            <div style={{ flex: 1 }}>
-              <Input 
-                label="Nueva Categoría" 
-                placeholder="Ej. Gimnasio..." 
-                value={newCategoryName}
-                onChange={(e) => setNewCategoryName(e.target.value)}
-              />
-            </div>
-            <Button type="submit" variant="primary" style={{ alignSelf: 'flex-end', padding: '12px', height: '48px' }} disabled={!newCategoryName.trim()}>
-              Agregar
-            </Button>
-          </form>
-        </div>
-      </Modal>
     </main>
   );
 }
-
-

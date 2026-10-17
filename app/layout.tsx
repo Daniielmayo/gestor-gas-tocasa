@@ -3,6 +3,7 @@ import { Inter } from "next/font/google";
 import "./globals.css";
 import { BottomNav } from "@/components/ui/BottomNav";
 import { AuthProvider } from "@/context/AuthContext";
+import { HouseholdProvider } from "@/context/HouseholdContext";
 
 const inter = Inter({
   variable: "--font-inter",
@@ -10,8 +11,8 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "Gestión de Gastos",
-  description: "Sistema colaborativo de listas y pagos compartidos",
+  title: "Gestión de Gastos en Pareja",
+  description: "Control de gastos del hogar, presupuestos, comprobantes y balance en pareja",
   manifest: "/manifest.json",
   themeColor: "#ffffff",
   appleWebApp: {
@@ -30,8 +31,10 @@ export default function RootLayout({
     <html lang="es" className={`${inter.variable}`}>
       <body>
         <AuthProvider>
-          {children}
-          <BottomNav />
+          <HouseholdProvider>
+            {children}
+            <BottomNav />
+          </HouseholdProvider>
         </AuthProvider>
       </body>
     </html>

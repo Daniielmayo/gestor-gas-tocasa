@@ -1,5 +1,5 @@
 'use client';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/Button';
@@ -7,37 +7,69 @@ import { Card } from '@/components/ui/Card';
 import { Spinner } from '@/components/ui/Spinner';
 import { Modal } from '@/components/ui/Modal';
 import { Input } from '@/components/ui/Input';
-import { UserEmailAutocomplete } from '@/components/ui/UserEmailAutocomplete';
 import { SpeedDial } from '@/components/ui/SpeedDial';
-import { ArrowLeft, ArrowRight, ArrowUpRight, ArrowDownRight, TrendingUp, TrendingDown, Wallet, ChevronLeft, ChevronRight, Settings, UserPlus, Trash2 } from 'lucide-react';
+import { ScopeFilterBar } from '@/components/ui/ScopeFilterBar';
+import { QuickMovementModal } from '@/components/finanzas/QuickMovementModal';
+import { HouseholdConfigModal } from '@/components/finanzas/HouseholdConfigModal';
+import { BudgetManagerModal } from '@/components/finanzas/BudgetManagerModal';
+import {
+  ArrowLeft,
+  ArrowRight,
+  ArrowUpRight,
+  ArrowDownRight,
+  TrendingUp,
+  TrendingDown,
+  Wallet,
+  ChevronLeft,
+  ChevronRight,
+  Settings,
+  UserPlus,
+  Trash2,
+  PiggyBank,
+  Target,
+  BarChart3,
+  Scale,
+  Receipt,
+  AlertTriangle,
+  Search,
+  Filter,
+  CreditCard,
+  Image as ImageIcon,
+  CheckCircle2,
+  SlidersHorizontal,
+} from 'lucide-react';
 import styles from './finanzas.module.css';
 import { useAuth } from '@/context/AuthContext';
+import { useHousehold } from '@/context/HouseholdContext';
 import { db } from '@/lib/firebase';
-import { collection, query, where, onSnapshot, addDoc, Timestamp, or, doc, setDoc, arrayUnion, getDocs, deleteDoc, updateDoc, increment, serverTimestamp } from 'firebase/firestore';
+import {
+  collection,
+  query,
+  where,
+  onSnapshot,
+  addDoc,
+  Timestamp,
+  or,
+  doc,
+  updateDoc,
+  serverTimestamp,
+} from 'firebase/firestore';
 import { formatCOP, formatInputCOP, parseCOP } from '@/lib/currency';
-import { PiggyBank, Plus, Target } from 'lucide-react';
 import { useUsersMap } from '@/lib/hooks/useUsersMap';
 import { AvatarGroup } from '@/components/ui/AvatarGroup';
-import { sendPushNotification } from '@/lib/pushUtils';
-
-interface Transaction {
-  id: string;
-  type: 'income' | 'expense';
-  amount: number;
-  category: string;
-  description: string;
-  createdAt: any;
-  ownerId: string;
-  ownerName?: string;
-  recurringPaymentId?: string;
-  recurringPaymentTitle?: string;
-}
-
-interface CustomCategory {
-  id: string;
-  name: string;
-  type: 'income' | 'expense';
-}
+import {
+  BudgetDoc,
+  EnhancedTransaction,
+  Scope,
+  SettlementDoc,
+} from '@/lib/models';
+import {
+  evaluateBudgetStatus,
+  getPeriodKey,
+  TriggeredBudgetAlert,
+} from '@/lib/budgetEngine';
+import { calculatePartnerBalance } from '@/lib/balanceEngine';
+import { deleteReceiptAttachment } from '@/lib/cloudinaryClient';
 
 interface SavingGoal {
   id: string;
@@ -57,59 +89,65 @@ interface Debt {
   sharedWith?: string[];
 }
 
+type FinanzasSubTab = 'extracto' | 'reportes' | 'pareja';
+
 export default function Finanzas() {
   const { user, profile, loading } = useAuth();
+  const {
+    household,
+    partner,
+    partnerUid,
+    globalScope,
+    paymentMethods,
+    categories,
+  } = useHousehold();
   const router = useRouter();
   const { usersMap } = useUsersMap();
 
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [isReady, setIsReady] = useState(false);
-  const [currentDate, setCurrentDate] = useState(new Date());
-  
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [transactionType, setTransactionType] = useState<'income' | 'expense'>('expense');
-  const [amount, setAmount] = useState('');
-  const [category, setCategory] = useState('');
-  const [customCategory, setCustomCategory] = useState('');
-  const [description, setDescription] = useState('');
-  const [transactionDate, setTransactionDate] = useState(() => new Date().toISOString().split('T')[0]);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [editingTxId, setEditingTxId] = useState<string | null>(null);
-
-  // Sharing state
-  const [financeSettings, setFinanceSettings] = useState<any>(null);
-  const [isShareModalOpen, setIsShareModalOpen] = useState(false);
-  const [shareEmail, setShareEmail] = useState('');
-  const [createShareEmail, setCreateShareEmail] = useState('');
-  const [isSharing, setIsSharing] = useState(false);
-
-  // Filter state
-  const [filterMode, setFilterMode] = useState<'all' | 'personal' | 'shared'>('all');
-
-  // Custom Categories state
-  const [customCategories, setCustomCategories] = useState<CustomCategory[]>([]);
-  const [isCategoriesModalOpen, setIsCategoriesModalOpen] = useState(false);
-  const [newCatName, setNewCatName] = useState('');
-  const [newCatType, setNewCatType] = useState<'income' | 'expense'>('expense');
-  const [isAddingCat, setIsAddingCat] = useState(false);
-
-  // Recurring payments state for linking
+  const [transactions, setTransactions] = useState<EnhancedTransaction[]>([]);
+  const [budgets, setBudgets] = useState<BudgetDoc[]>([]);
+  const [settlements, setSettlements] = useState<SettlementDoc[]>([]);
   const [recurringPayments, setRecurringPayments] = useState<any[]>([]);
-  const [selectedRecurringPaymentId, setSelectedRecurringPaymentId] = useState('');
-
-  // Savings state
   const [savings, setSavings] = useState<SavingGoal[]>([]);
-
-  // Debts state
   const [debts, setDebts] = useState<Debt[]>([]);
+  const [isReady, setIsReady] = useState(false);
 
-  // Delete transaction state
-  const [isDeleteTxModalOpen, setIsDeleteTxModalOpen] = useState(false);
-  const [txToDelete, setTxToDelete] = useState<Transaction | null>(null);
+  // Period navigation (Month + Quincena filter RF-07 / RF-09)
+  const [currentDate, setCurrentDate] = useState(new Date());
+  const [quincenaFilter, setQuincenaFilter] = useState<'all' | 'q1' | 'q2'>('all');
+  const [activeSubTab, setActiveSubTab] = useState<FinanzasSubTab>('extracto');
+
+  // Ledger search & filters (RF-11)
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedCategoryFilter, setSelectedCategoryFilter] = useState('');
+  const [selectedTagFilter, setSelectedTagFilter] = useState('');
+  const [selectedMethodFilter, setSelectedMethodFilter] = useState('');
+  const [showRunningBalance, setShowRunningBalance] = useState(false);
+  const [visibleDaysLimit, setVisibleDaysLimit] = useState(15);
+
+  // Modals state
+  const [isQuickModalOpen, setIsQuickModalOpen] = useState(false);
+  const [quickModalType, setQuickModalType] = useState<'expense' | 'income'>('expense');
+  const [editingTx, setEditingTx] = useState<EnhancedTransaction | null>(null);
+
+  const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
+  const [configInitialTab, setConfigInitialTab] = useState<'hogar' | 'metodos' | 'catalogo' | 'lugares' | 'ingresos'>('metodos');
+
+  const [isBudgetModalOpen, setIsBudgetModalOpen] = useState(false);
+
+  // Alert banner state (RF-08)
+  const [recentAlerts, setRecentAlerts] = useState<TriggeredBudgetAlert[]>([]);
+
+  // Soft delete & receipt inspection modals
+  const [txToDelete, setTxToDelete] = useState<EnhancedTransaction | null>(null);
   const [isDeletingTx, setIsDeletingTx] = useState(false);
+  const [inspectingTx, setInspectingTx] = useState<EnhancedTransaction | null>(null);
 
-  const predefinedIncomeCategories = ['Sueldo', 'Venta', 'Transferencia'];
-  const predefinedExpenseCategories = ['Supermercado', 'Servicios', 'Alquiler', 'Transporte', 'Ocio', 'Salud', 'Educación'];
+  // Settlement modal state (RF-12)
+  const [isSettlementModalOpen, setIsSettlementModalOpen] = useState(false);
+  const [settlementAmount, setSettlementAmount] = useState('');
+  const [settlementNote, setSettlementNote] = useState('');
+  const [isSavingSettlement, setIsSavingSettlement] = useState(false);
 
   useEffect(() => {
     if (!loading && !user) {
@@ -123,829 +161,1433 @@ export default function Finanzas() {
     const txRef = collection(db, 'transactions');
     const qTx = query(
       txRef,
-      or(
-        where('ownerId', '==', user.uid),
-        where('sharedWith', 'array-contains', user.uid)
-      )
+      or(where('ownerId', '==', user.uid), where('sharedWith', 'array-contains', user.uid))
     );
 
-    const unsubTx = onSnapshot(qTx, (snapshot) => {
-      const data: Transaction[] = [];
-      snapshot.forEach(doc => {
-        data.push({ id: doc.id, ...doc.data() } as Transaction);
-      });
-      data.sort((a, b) => {
-        const timeA = a.createdAt?.toMillis ? a.createdAt.toMillis() : Date.now();
-        const timeB = b.createdAt?.toMillis ? b.createdAt.toMillis() : Date.now();
-        return timeB - timeA;
-      });
-      setTransactions(data);
-      setIsReady(true);
-    }, (error) => {
-      console.error("Error fetching transactions:", error);
-      setIsReady(true);
-    });
-
-    const settingsRef = doc(db, 'financeSettings', user.uid);
-    const unsubSettings = onSnapshot(settingsRef, (docSnap) => {
-      if (docSnap.exists()) {
-        setFinanceSettings(docSnap.data());
-      } else {
-        setFinanceSettings({ sharedWith: [] });
+    const unsubTx = onSnapshot(
+      qTx,
+      (snapshot) => {
+        const data: EnhancedTransaction[] = [];
+        snapshot.forEach((d) => {
+          const raw = d.data() as EnhancedTransaction;
+          if (!raw.deletedAt) {
+            data.push({ ...raw, id: d.id });
+          }
+        });
+        data.sort((a, b) => {
+          const timeA = a.createdAt?.toMillis ? a.createdAt.toMillis() : Date.now();
+          const timeB = b.createdAt?.toMillis ? b.createdAt.toMillis() : Date.now();
+          return timeB - timeA;
+        });
+        setTransactions(data);
+        setIsReady(true);
+      },
+      (error) => {
+        console.error('Error fetching transactions:', error);
+        setIsReady(true);
       }
+    );
+
+    const budgetRef = collection(db, 'budgets');
+    const qBudget = query(
+      budgetRef,
+      or(where('ownerId', '==', user.uid), where('sharedWith', 'array-contains', user.uid))
+    );
+    const unsubBudgets = onSnapshot(qBudget, (snapshot) => {
+      const list: BudgetDoc[] = [];
+      snapshot.forEach((d) => list.push({ id: d.id, ...d.data() } as BudgetDoc));
+      setBudgets(list);
     });
 
-    const catRef = collection(db, 'financeCategories');
-    const qCat = query(catRef, where('ownerId', '==', user.uid));
-    const unsubCat = onSnapshot(qCat, (snapshot) => {
-      const data: CustomCategory[] = [];
-      snapshot.forEach(d => data.push({ id: d.id, ...d.data() } as CustomCategory));
-      setCustomCategories(data);
+    const settleRef = collection(db, 'settlements');
+    const qSettle = query(
+      settleRef,
+      or(where('ownerId', '==', user.uid), where('sharedWith', 'array-contains', user.uid))
+    );
+    const unsubSettle = onSnapshot(qSettle, (snapshot) => {
+      const list: SettlementDoc[] = [];
+      snapshot.forEach((d) => list.push({ id: d.id, ...d.data() } as SettlementDoc));
+      list.sort((a, b) => {
+        const tA = a.settledAt?.toMillis ? a.settledAt.toMillis() : 0;
+        const tB = b.settledAt?.toMillis ? b.settledAt.toMillis() : 0;
+        return tB - tA;
+      });
+      setSettlements(list);
     });
 
     const payRef = collection(db, 'recurringPayments');
     const qPay = query(
       payRef,
-      or(
-        where('ownerId', '==', user.uid),
-        where('sharedWith', 'array-contains', user.uid)
-      )
+      or(where('ownerId', '==', user.uid), where('sharedWith', 'array-contains', user.uid))
     );
     const unsubPay = onSnapshot(qPay, (snapshot) => {
       const data: any[] = [];
-      snapshot.forEach(doc => data.push({ id: doc.id, ...doc.data() }));
+      snapshot.forEach((d) => data.push({ id: d.id, ...d.data() }));
       setRecurringPayments(data);
     });
 
     const savRef = collection(db, 'savings');
     const qSav = query(
       savRef,
-      or(
-        where('ownerId', '==', user.uid),
-        where('sharedWith', 'array-contains', user.uid)
-      )
+      or(where('ownerId', '==', user.uid), where('sharedWith', 'array-contains', user.uid))
     );
     const unsubSav = onSnapshot(qSav, (snapshot) => {
       const data: SavingGoal[] = [];
-      snapshot.forEach(doc => data.push({ id: doc.id, ...doc.data() } as SavingGoal));
+      snapshot.forEach((d) => data.push({ id: d.id, ...d.data() } as SavingGoal));
       setSavings(data);
     });
 
     const debtRef = collection(db, 'debts');
     const qDebt = query(
       debtRef,
-      or(
-        where('ownerId', '==', user.uid),
-        where('sharedWith', 'array-contains', user.uid)
-      )
+      or(where('ownerId', '==', user.uid), where('sharedWith', 'array-contains', user.uid))
     );
     const unsubDebt = onSnapshot(qDebt, (snapshot) => {
       const data: Debt[] = [];
-      snapshot.forEach(doc => data.push({ id: doc.id, ...doc.data() } as Debt));
+      snapshot.forEach((d) => data.push({ id: d.id, ...d.data() } as Debt));
       setDebts(data);
     });
 
     return () => {
       unsubTx();
-      unsubSettings();
-      unsubCat();
+      unsubBudgets();
+      unsubSettle();
       unsubPay();
       unsubSav();
       unsubDebt();
     };
   }, [user]);
 
-  const handleAddTransaction = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const finalCategory = category === 'Otro' ? customCategory : category;
-    if (!amount || !finalCategory || !transactionDate || isSubmitting || !user) return;
+  const getMonthName = (date: Date) =>
+    date.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' });
 
-    setIsSubmitting(true);
-    try {
-      let currentSharedWith = financeSettings?.sharedWith || [];
-      if (createShareEmail.trim()) {
-        const usersRef = collection(db, 'users');
-        const q = query(usersRef, where('email', '==', createShareEmail.trim().toLowerCase()));
-        const snap = await getDocs(q);
-        if (!snap.empty) {
-          const friendUid = snap.docs[0].data().uid;
-          if (friendUid !== user.uid) {
-            const settingsRef = doc(db, 'financeSettings', user.uid);
-            await setDoc(settingsRef, { sharedWith: arrayUnion(friendUid) }, { merge: true });
-            currentSharedWith = [...new Set([...currentSharedWith, friendUid])];
-            if (!(financeSettings?.sharedWith || []).includes(friendUid)) {
-              await addDoc(collection(db, 'notifications'), {
-                userId: friendUid,
-                title: 'Finanzas Compartidas',
-                message: `${profile?.displayName || 'Alguien'} ha compartido sus finanzas contigo al crear un movimiento.`,
-                type: 'finance',
-                link: '/finanzas',
-                read: false,
-                createdAt: Timestamp.now()
-              });
-            }
-          }
-        }
-      }
+  const nextMonth = () =>
+    setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 1));
 
-      // Parse local date (adding time to avoid UTC previous day shift)
-      const dateObj = new Date(`${transactionDate}T12:00:00`);
-      
-      const selectedPay = recurringPayments.find(p => p.id === selectedRecurringPaymentId);
-      
-      if (editingTxId) {
-        await updateDoc(doc(db, 'transactions', editingTxId), {
-          type: transactionType,
-          amount: parseCOP(amount),
-          category: finalCategory,
-          description,
-          createdAt: Timestamp.fromDate(dateObj),
-          recurringPaymentId: selectedPay ? selectedPay.id : null,
-          recurringPaymentTitle: selectedPay ? selectedPay.title : null
-        });
-      } else {
-        await addDoc(collection(db, 'transactions'), {
-          type: transactionType,
-          amount: parseCOP(amount),
-          category: finalCategory,
-          description,
-          ownerId: user.uid,
-          ownerName: profile?.displayName?.split(' ')[0] || 'Usuario',
-          sharedWith: currentSharedWith,
-          createdAt: Timestamp.fromDate(dateObj),
-          recurringPaymentId: selectedPay ? selectedPay.id : null,
-          recurringPaymentTitle: selectedPay ? selectedPay.title : null
-        });
-      }
-      setIsModalOpen(false);
-      setEditingTxId(null);
-      setAmount('');
-      setCategory('');
-      setCustomCategory('');
-      setDescription('');
-      setSelectedRecurringPaymentId('');
-      setCreateShareEmail('');
-      setTransactionDate(new Date().toISOString().split('T')[0]);
-    } catch (error) {
-      console.error('Error adding transaction: ', error);
-    } finally {
-      setIsSubmitting(false);
-    }
+  const prevMonth = () =>
+    setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() - 1, 1));
+
+  // Helper to resolve transaction scope with legacy fallback (Section 0 Rule 3)
+  const resolveTxScope = (t: EnhancedTransaction): Scope => {
+    if (t.scope === 'personal' || t.scope === 'conjunto') return t.scope;
+    return t.sharedWith && t.sharedWith.length > 0 ? 'conjunto' : 'personal';
   };
 
-  const openModal = (type: 'income' | 'expense') => {
-    setEditingTxId(null);
-    setTransactionType(type);
-    setAmount('');
-    setCategory('');
-    setCustomCategory('');
-    setDescription('');
-    setSelectedRecurringPaymentId('');
-    setCreateShareEmail('');
-    setTransactionDate(new Date().toISOString().split('T')[0]);
-    setIsModalOpen(true);
-  };
+  // Transactions matching selected month + quincena + global scope + search/filters
+  const periodTransactions = useMemo(() => {
+    if (!user) return [];
+    return transactions.filter((t) => {
+      const txDate = t.createdAt?.toDate ? t.createdAt.toDate() : new Date();
+      const matchesMonth =
+        txDate.getMonth() === currentDate.getMonth() &&
+        txDate.getFullYear() === currentDate.getFullYear();
+      if (!matchesMonth) return false;
 
-  const openEditTxModal = (t: Transaction) => {
-    setEditingTxId(t.id);
-    setTransactionType(t.type);
-    setAmount(formatInputCOP(String(t.amount)));
-    
-    const allCats = t.type === 'income' ? incomeCats : expenseCats;
-    if (allCats.includes(t.category)) {
-      setCategory(t.category);
-      setCustomCategory('');
-    } else {
-      setCategory('Otro');
-      setCustomCategory(t.category);
-    }
-    
-    setDescription(t.description || '');
-    if (t.createdAt) {
-      setTransactionDate(new Date(t.createdAt.toDate()).toISOString().split('T')[0]);
-    } else {
-      setTransactionDate(new Date().toISOString().split('T')[0]);
-    }
-    setSelectedRecurringPaymentId(t.recurringPaymentId || '');
-    setIsModalOpen(true);
-  };
+      if (quincenaFilter === 'q1' && txDate.getDate() > 15) return false;
+      if (quincenaFilter === 'q2' && txDate.getDate() <= 15) return false;
 
-  const handleShareFinance = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!shareEmail.trim() || !user || !profile) return;
-    setIsSharing(true);
+      const scope = resolveTxScope(t);
+      const payer = t.paidByUserId || t.ownerId;
 
-    try {
-      const usersRef = collection(db, 'users');
-      const q = query(usersRef, where('email', '==', shareEmail.trim().toLowerCase()));
-      const snap = await getDocs(q);
-
-      if (snap.empty) {
-        alert("Ese correo electrónico no está registrado en la app.");
-        setIsSharing(false);
-        return;
+      if (globalScope === 'mio') {
+        if (!(scope === 'personal' && t.ownerId === user.uid) && payer !== user.uid) return false;
+      } else if (globalScope === 'conjunto') {
+        if (scope !== 'conjunto') return false;
+      } else if (globalScope === 'pareja' && partnerUid) {
+        if (payer !== partnerUid && t.ownerId !== partnerUid) return false;
       }
 
-      const friendDoc = snap.docs[0];
-      const friendUid = friendDoc.data().uid;
-      const friendName = friendDoc.data().displayName || shareEmail;
+      if (selectedCategoryFilter && t.category !== selectedCategoryFilter) return false;
+      if (
+        selectedTagFilter &&
+        !(t.tags || []).some((tg) => tg.toLowerCase() === selectedTagFilter.toLowerCase())
+      ) {
+        return false;
+      }
+      if (selectedMethodFilter && t.paymentMethodId !== selectedMethodFilter) return false;
 
-      if (friendUid === user.uid) {
-        alert("No puedes invitarte a ti mismo.");
-        setIsSharing(false);
-        return;
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase();
+        const hay = `${t.place || ''} ${t.description || ''} ${t.title || ''} ${t.category || ''} ${
+          t.note || ''
+        } ${(t.tags || []).join(' ')}`.toLowerCase();
+        if (!hay.includes(q)) return false;
       }
 
-      const settingsRef = doc(db, 'financeSettings', user.uid);
-      await setDoc(settingsRef, {
-        sharedWith: arrayUnion(friendUid)
-      }, { merge: true });
+      return true;
+    });
+  }, [
+    transactions,
+    currentDate,
+    quincenaFilter,
+    globalScope,
+    selectedCategoryFilter,
+    selectedTagFilter,
+    selectedMethodFilter,
+    searchQuery,
+    user,
+    partnerUid,
+  ]);
 
-      await addDoc(collection(db, 'notifications'), {
-        userId: friendUid,
-        title: 'Finanzas Compartidas',
-        message: `${profile.displayName || 'Alguien'} ha compartido su módulo de finanzas contigo.`,
-        type: 'finance',
-        link: '/finanzas',
-        read: false,
-        createdAt: Timestamp.now()
+  // Previous month transactions for comparative reporting (RF-09)
+  const prevMonthTransactions = useMemo(() => {
+    const prevDate = new Date(currentDate.getFullYear(), currentDate.getMonth() - 1, 1);
+    return transactions.filter((t) => {
+      const txDate = t.createdAt?.toDate ? t.createdAt.toDate() : new Date();
+      return (
+        txDate.getMonth() === prevDate.getMonth() &&
+        txDate.getFullYear() === prevDate.getFullYear()
+      );
+    });
+  }, [transactions, currentDate]);
+
+  const totalIncome = periodTransactions
+    .filter((t) => t.type === 'income')
+    .reduce((acc, t) => acc + Number(t.amount || 0), 0);
+  const totalExpense = periodTransactions
+    .filter((t) => t.type === 'expense')
+    .reduce((acc, t) => acc + Number(t.amount || 0), 0);
+  const balance = totalIncome - totalExpense;
+
+  const prevMonthExpense = prevMonthTransactions
+    .filter((t) => t.type === 'expense')
+    .reduce((acc, t) => acc + Number(t.amount || 0), 0);
+
+  // Active budget for current period (RF-07)
+  const currentBudgetDoc = useMemo(() => {
+    const monthlyKey = getPeriodKey(currentDate, 'mensual');
+    const qKey =
+      quincenaFilter === 'q1'
+        ? `${monthlyKey}-Q1`
+        : quincenaFilter === 'q2'
+        ? `${monthlyKey}-Q2`
+        : getPeriodKey(new Date(), 'quincenal');
+
+    return (
+      budgets.find((b) => b.periodKey === qKey) ||
+      budgets.find((b) => b.periodKey === monthlyKey) ||
+      budgets[0] ||
+      null
+    );
+  }, [budgets, currentDate, quincenaFilter]);
+
+  const currentBudgetStatus = useMemo(() => {
+    if (!currentBudgetDoc || !user) return null;
+    return evaluateBudgetStatus(currentBudgetDoc, transactions, user.uid);
+  }, [currentBudgetDoc, transactions, user]);
+
+  // Partner Balance & Settlements calculation (RF-12)
+  const partnerBalance = useMemo(() => {
+    if (!user) return null;
+    const myName = profile?.displayName?.split(' ')[0] || 'Yo';
+    const theirName = partner?.displayName?.split(' ')[0] || 'Pareja';
+    const theirUid = partnerUid || 'partner_pending';
+
+    return calculatePartnerBalance({
+      userAId: user.uid,
+      userAName: myName,
+      userBId: theirUid,
+      userBName: theirName,
+      transactions: periodTransactions,
+      settlements,
+      splitRule: household?.splitRule || '50_50',
+    });
+  }, [user, profile, partner, partnerUid, periodTransactions, settlements, household?.splitRule]);
+
+  // Group ledger movements by day with daily total and optional running balance (RF-11)
+  const groupedLedgerDays = useMemo(() => {
+    // Compute running balance chronologically first
+    const asc = [...periodTransactions].reverse();
+    let running = 0;
+    const runningMap = new Map<string, number>();
+    for (const tx of asc) {
+      running += tx.type === 'income' ? Number(tx.amount) : -Number(tx.amount);
+      runningMap.set(tx.id, running);
+    }
+
+    const groups: {
+      dateKey: string;
+      dateLabel: string;
+      dailyNet: number;
+      items: (EnhancedTransaction & { runningBalance: number })[];
+    }[] = [];
+
+    for (const tx of periodTransactions) {
+      const d = tx.createdAt?.toDate ? tx.createdAt.toDate() : new Date();
+      const dateKey = d.toISOString().split('T')[0];
+      const dateLabel = d.toLocaleDateString('es-CO', {
+        weekday: 'short',
+        day: 'numeric',
+        month: 'short',
       });
 
-      alert(`¡Finanzas compartidas con éxito con ${friendName}!`);
-      setIsShareModalOpen(false);
-      setShareEmail('');
-    } catch (error) {
-      console.error(error);
-      alert("Hubo un error al compartir.");
-    } finally {
-      setIsSharing(false);
-    }
-  };
-
-  const handleAddCategory = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newCatName.trim() || !user) return;
-    setIsAddingCat(true);
-    try {
-      await addDoc(collection(db, 'financeCategories'), {
-        name: newCatName.trim(),
-        type: newCatType,
-        ownerId: user.uid
+      let group = groups.find((g) => g.dateKey === dateKey);
+      if (!group) {
+        group = { dateKey, dateLabel, dailyNet: 0, items: [] };
+        groups.push(group);
+      }
+      const signed = tx.type === 'income' ? Number(tx.amount) : -Number(tx.amount);
+      group.dailyNet += signed;
+      group.items.push({
+        ...tx,
+        runningBalance: runningMap.get(tx.id) || 0,
       });
-      setNewCatName('');
-    } catch (error) {
-      console.error(error);
-    } finally {
-      setIsAddingCat(false);
     }
-  };
 
-  const handleDeleteCategory = async (id: string) => {
-    try {
-      await deleteDoc(doc(db, 'financeCategories', id));
-    } catch (error) {
-      console.error(error);
+    return groups;
+  }, [periodTransactions]);
+
+  // Reports aggregations (by category & by tag RF-09)
+  const categoryBreakdown = useMemo(() => {
+    const map = new Map<string, { name: string; amount: number; color: string }>();
+    const expenses = periodTransactions.filter((t) => t.type === 'expense');
+    for (const exp of expenses) {
+      const catName = exp.category || 'Otros';
+      const catDef = categories.find((c) => c.name.toLowerCase() === catName.toLowerCase());
+      const curr = map.get(catName) || {
+        name: catName,
+        amount: 0,
+        color: catDef?.color || '#3B82F6',
+      };
+      curr.amount += Number(exp.amount || 0);
+      map.set(catName, curr);
     }
-  };
+    return Array.from(map.values()).sort((a, b) => b.amount - a.amount);
+  }, [periodTransactions, categories]);
 
-  const handleDeleteTransaction = async () => {
-    if (!txToDelete) return;
+  const tagBreakdown = useMemo(() => {
+    const map = new Map<string, number>();
+    const expenses = periodTransactions.filter((t) => t.type === 'expense');
+    for (const exp of expenses) {
+      for (const tg of exp.tags || []) {
+        const clean = tg.toLowerCase();
+        map.set(clean, (map.get(clean) || 0) + Number(exp.amount || 0));
+      }
+    }
+    return Array.from(map.entries())
+      .map(([name, amount]) => ({ name, amount }))
+      .sort((a, b) => b.amount - a.amount);
+  }, [periodTransactions]);
+
+  // Soft delete implementation (RF-03 + RF-06 Cloudinary cleanup)
+  const handleSoftDeleteTransaction = async () => {
+    if (!txToDelete || !user) return;
     setIsDeletingTx(true);
     try {
-      await deleteDoc(doc(db, 'transactions', txToDelete.id));
-      setIsDeleteTxModalOpen(false);
+      await updateDoc(doc(db, 'transactions', txToDelete.id), {
+        deletedAt: serverTimestamp(),
+        updatedBy: user.uid,
+      });
+      if (txToDelete.attachments?.length) {
+        for (const att of txToDelete.attachments) {
+          await deleteReceiptAttachment(att.publicId);
+        }
+      }
       setTxToDelete(null);
     } catch (error) {
-      console.error(error);
+      console.error('Error soft-deleting transaction:', error);
     } finally {
       setIsDeletingTx(false);
     }
   };
 
+  const handleRecordSettlement = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user || !partnerBalance || !partnerBalance.debtorId || !partnerBalance.creditorId) return;
+    const amt = parseCOP(settlementAmount);
+    if (amt <= 0) return;
 
+    setIsSavingSettlement(true);
+    try {
+      await addDoc(collection(db, 'settlements'), {
+        householdId: household?.id || 'default',
+        ownerId: user.uid,
+        sharedWith: partnerUid ? [partnerUid] : [],
+        fromUserId: partnerBalance.debtorId,
+        fromUserName: partnerBalance.debtorName || 'Deudor',
+        toUserId: partnerBalance.creditorId,
+        toUserName: partnerBalance.creditorName || 'Acreedor',
+        amount: amt,
+        note: settlementNote.trim() || 'Liquidación de gastos conjuntos',
+        settledAt: Timestamp.now(),
+        createdAt: Timestamp.now(),
+      });
+      setIsSettlementModalOpen(false);
+      setSettlementAmount('');
+      setSettlementNote('');
+    } catch (err) {
+      console.error('Error recording settlement:', err);
+    } finally {
+      setIsSavingSettlement(false);
+    }
+  };
 
   if (loading || !user || !isReady) {
     return (
       <main className={`container ${styles.main}`}>
-        <Spinner message="Cargando finanzas..." />
+        <Spinner message="Cargando centro financiero..." />
       </main>
     );
   }
 
-  const getMonthName = (date: Date) => {
-    return date.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' });
-  };
+  const totalSavingsTarget = savings.reduce((sum, s) => sum + s.targetAmount, 0);
+  const totalSavingsCurrent = savings.reduce((sum, s) => sum + s.currentAmount, 0);
+  const overallSavingsProgress =
+    totalSavingsTarget > 0 ? Math.min(100, Math.round((totalSavingsCurrent / totalSavingsTarget) * 100)) : 0;
 
-  const nextMonth = () => {
-    setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 1));
-  };
-
-  const prevMonth = () => {
-    setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() - 1, 1));
-  };
-
-  const filteredTransactions = transactions.filter(t => {
-    const txDate = t.createdAt ? t.createdAt.toDate() : new Date();
-    const matchesMonth = txDate.getMonth() === currentDate.getMonth() && txDate.getFullYear() === currentDate.getFullYear();
-    if (!matchesMonth) return false;
-
-    if (filterMode === 'personal') {
-      return t.ownerId === user.uid;
-    } else if (filterMode === 'shared') {
-      return t.ownerId !== user.uid;
-    }
-    return true; // 'all'
-  });
-
-  const totalIncome = filteredTransactions.filter(t => t.type === 'income').reduce((acc, t) => acc + t.amount, 0);
-  const totalExpense = filteredTransactions.filter(t => t.type === 'expense').reduce((acc, t) => acc + t.amount, 0);
-  
-  // Totals for debts
   const totalDebtTarget = debts.reduce((sum, d) => sum + d.targetAmount, 0);
   const totalDebtPaid = debts.reduce((sum, d) => sum + d.currentAmount, 0);
-  const totalDebtRemaining = totalDebtTarget - totalDebtPaid > 0 ? totalDebtTarget - totalDebtPaid : 0;
-  const overallDebtProgress = totalDebtTarget > 0 ? Math.min(100, Math.round((totalDebtPaid / totalDebtTarget) * 100)) : 0;
-  const balance = totalIncome - totalExpense;
-
-  const filteredSavings = savings.filter(s => {
-    if (filterMode === 'personal') {
-      return s.ownerId === user.uid && (!s.sharedWith || s.sharedWith.length === 0);
-    } else if (filterMode === 'shared') {
-      return s.ownerId !== user.uid || (s.sharedWith && s.sharedWith.length > 0);
-    }
-    return true;
-  });
-
-  const totalSavingsTarget = filteredSavings.reduce((sum, s) => sum + s.targetAmount, 0);
-  const totalSavingsCurrent = filteredSavings.reduce((sum, s) => sum + s.currentAmount, 0);
-  const overallSavingsProgress = totalSavingsTarget > 0 ? Math.min(100, Math.round((totalSavingsCurrent / totalSavingsTarget) * 100)) : 0;
-
-  const incomeCats = [...predefinedIncomeCategories, ...customCategories.filter(c => c.type === 'income').map(c => c.name), 'Otro'];
-  const expenseCats = [...predefinedExpenseCategories, ...customCategories.filter(c => c.type === 'expense').map(c => c.name), 'Otro'];
+  const totalDebtRemaining = Math.max(0, totalDebtTarget - totalDebtPaid);
 
   return (
-    <main className={`container ${styles.main}`}>
+    <main className={`container ${styles.main}`} style={{ paddingBottom: '100px' }}>
+      {/* TOP HEADER */}
       <header className={styles.header}>
         <Link href="/">
           <Button variant="ghost" className={styles.iconBtn}>
-            <ArrowLeft size={24} />
+            <ArrowLeft size={22} />
           </Button>
         </Link>
-        <div className={styles.titleContainer} style={{ flex: 1, overflow: 'hidden', marginLeft: '16px', display: 'flex', alignItems: 'center', gap: '12px' }}>
+        <div
+          className={styles.titleContainer}
+          style={{
+            flex: 1,
+            overflow: 'hidden',
+            marginLeft: '10px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '10px',
+          }}
+        >
           <h1 className="text-headline-md">Finanzas</h1>
-          {(financeSettings?.sharedWith && financeSettings.sharedWith.length > 0) && (
-            <AvatarGroup 
-              users={[
-                usersMap[user?.uid || ''],
-                ...financeSettings.sharedWith.map((uid: string) => usersMap[uid])
-              ].filter(Boolean) as any} 
-              size="sm" 
+          {partner && (
+            <AvatarGroup
+              users={[usersMap[user.uid], usersMap[partner.uid]].filter(Boolean) as any}
+              size="sm"
             />
           )}
         </div>
         <div style={{ display: 'flex', gap: '4px' }}>
-          <Button variant="ghost" className={styles.iconBtn} onClick={() => setIsShareModalOpen(true)}>
+          <Button
+            variant="ghost"
+            className={styles.iconBtn}
+            onClick={() => {
+              setConfigInitialTab('hogar');
+              setIsConfigModalOpen(true);
+            }}
+            title="Vincular pareja"
+          >
             <UserPlus size={20} color="var(--color-primary)" />
           </Button>
-          <Button variant="ghost" className={styles.iconBtn} onClick={() => setIsCategoriesModalOpen(true)}>
+          <Button
+            variant="ghost"
+            className={styles.iconBtn}
+            onClick={() => {
+              setConfigInitialTab('metodos');
+              setIsConfigModalOpen(true);
+            }}
+            title="Tarjetas y Métodos de Pago"
+          >
+            <CreditCard size={20} />
+          </Button>
+          <Button
+            variant="ghost"
+            className={styles.iconBtn}
+            onClick={() => {
+              setConfigInitialTab('catalogo');
+              setIsConfigModalOpen(true);
+            }}
+            title="Categorías y Tags"
+          >
             <Settings size={20} />
           </Button>
         </div>
       </header>
 
-      <div className={styles.monthSelector}>
-        <Button variant="ghost" className={styles.iconBtn} onClick={prevMonth}>
-          <ChevronLeft size={24} />
-        </Button>
-        <span className={styles.monthText}>{getMonthName(currentDate)}</span>
-        <Button 
-          variant="ghost" 
-          className={styles.iconBtn} 
-          onClick={nextMonth} 
-          disabled={currentDate.getMonth() === new Date().getMonth() && currentDate.getFullYear() === new Date().getFullYear()}
-        >
-          <ChevronRight size={24} />
-        </Button>
+      {/* GLOBAL SCOPE SELECTOR (Mío · Conjunto · Pareja · Todo) */}
+      <div style={{ marginBottom: '12px' }}>
+        <ScopeFilterBar />
       </div>
 
-      <section>
-        <div className={styles.balanceCard}>
-          <span className={styles.balanceTitle}>Balance {filterMode === 'all' ? 'Total' : filterMode === 'personal' ? 'Personal' : 'Compartido'}</span>
-          <h2 className={`${styles.balanceAmount} ${balance >= 0 ? styles.balanceAmountPositive : styles.balanceAmountNegative}`}>
-            {formatCOP(balance)}
-          </h2>
-        </div>
-
-        <div style={{ display: 'flex', gap: '8px', marginTop: '16px', overflowX: 'auto', paddingBottom: '8px' }}>
-          <Button 
-            variant={filterMode === 'all' ? 'primary' : 'secondary'} 
-            onClick={() => setFilterMode('all')}
-            style={{ borderRadius: '20px', padding: '4px 12px', fontSize: '14px', flex: '0 0 auto', minHeight: 'auto' }}
-          >
-            Todas
+      {/* MONTH + QUINCENA SELECTOR */}
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          gap: '8px',
+          marginBottom: '12px',
+          flexWrap: 'wrap',
+        }}
+      >
+        <div className={styles.monthSelector} style={{ margin: 0, flex: 1 }}>
+          <Button variant="ghost" className={styles.iconBtn} onClick={prevMonth}>
+            <ChevronLeft size={22} />
           </Button>
-          <Button 
-            variant={filterMode === 'personal' ? 'primary' : 'secondary'} 
-            onClick={() => setFilterMode('personal')}
-            style={{ borderRadius: '20px', padding: '4px 12px', fontSize: '14px', flex: '0 0 auto', minHeight: 'auto' }}
-          >
-            Personales
-          </Button>
-          <Button 
-            variant={filterMode === 'shared' ? 'primary' : 'secondary'} 
-            onClick={() => setFilterMode('shared')}
-            style={{ borderRadius: '20px', padding: '4px 12px', fontSize: '14px', flex: '0 0 auto', minHeight: 'auto' }}
-          >
-            Compartidas
+          <span className={styles.monthText} style={{ textTransform: 'capitalize' }}>
+            {getMonthName(currentDate)}
+          </span>
+          <Button variant="ghost" className={styles.iconBtn} onClick={nextMonth}>
+            <ChevronRight size={22} />
           </Button>
         </div>
-      </section>
 
-      {/* Access to Metas */}
-      <section style={{ marginTop: '16px' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-          <h3 className={styles.sectionTitle}>Metas de Ahorro</h3>
-        </div>
-        <Link href="/finanzas/metas" style={{ textDecoration: 'none' }}>
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            padding: '16px',
-            background: 'var(--color-surface-container-lowest)',
-            borderRadius: 'var(--radius-md)',
-            boxShadow: 'var(--shadow-level-1)',
-            cursor: 'pointer'
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1 }}>
-              <div style={{ width: '40px', height: '40px', borderRadius: '50%', background: 'rgba(15, 118, 110, 0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <PiggyBank size={20} color="var(--color-success)" />
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', flex: 1, paddingRight: '16px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
-                  <span className="text-body-md" style={{ fontWeight: 600, color: 'var(--color-on-surface)' }}>Gestionar Metas</span>
-                  {savings.length > 0 && (
-                    <span className="text-label-sm" style={{ color: 'var(--color-success)', fontWeight: 600 }}>{formatCOP(totalSavingsCurrent)}</span>
-                  )}
-                </div>
-                {savings.length > 0 ? (
-                  <div style={{ width: '100%', marginTop: '2px' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-                      <span className="text-label-sm" style={{ color: 'var(--color-on-surface-variant)', fontSize: '11px' }}>Progreso global</span>
-                      <span className="text-label-sm" style={{ color: 'var(--color-on-surface-variant)', fontSize: '11px' }}>{overallSavingsProgress}%</span>
-                    </div>
-                    <div style={{ width: '100%', height: '4px', backgroundColor: 'rgba(15, 118, 110, 0.15)', borderRadius: '2px', overflow: 'hidden' }}>
-                      <div style={{ width: `${overallSavingsProgress}%`, height: '100%', backgroundColor: 'var(--color-success)', borderRadius: '2px' }} />
-                    </div>
-                  </div>
-                ) : (
-                  <span className="text-label-sm" style={{ color: 'var(--color-on-surface-variant)' }}>Lleva el control de tus ahorros</span>
-                )}
-              </div>
-            </div>
-            <ArrowRight size={20} color="var(--color-on-surface-variant)" />
-          </div>
-        </Link>
-      </section>
-
-      {/* Access to Debts */}
-      <section style={{ marginTop: '16px' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-          <h3 className={styles.sectionTitle}>Cuentas por Pagar</h3>
-        </div>
-        <Link href="/finanzas/deudas" style={{ textDecoration: 'none' }}>
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            padding: '16px',
-            background: 'var(--color-surface-container-lowest)',
-            borderRadius: 'var(--radius-md)',
-            boxShadow: 'var(--shadow-level-1)',
-            cursor: 'pointer'
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1 }}>
-              <div style={{ width: '40px', height: '40px', borderRadius: '50%', background: 'rgba(239, 68, 68, 0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <Target size={20} color="var(--color-error)" />
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', flex: 1, paddingRight: '16px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
-                  <span className="text-body-md" style={{ fontWeight: 600, color: 'var(--color-on-surface)' }}>Gestionar Deudas</span>
-                  {debts.length > 0 && (
-                    <span className="text-label-sm" style={{ color: 'var(--color-error)', fontWeight: 600 }}>{formatCOP(totalDebtRemaining)}</span>
-                  )}
-                </div>
-                {debts.length > 0 ? (
-                  <div style={{ width: '100%', marginTop: '2px' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-                      <span className="text-label-sm" style={{ color: 'var(--color-on-surface-variant)', fontSize: '11px' }}>Progreso global</span>
-                      <span className="text-label-sm" style={{ color: 'var(--color-on-surface-variant)', fontSize: '11px' }}>{overallDebtProgress}%</span>
-                    </div>
-                    <div style={{ width: '100%', height: '4px', backgroundColor: 'rgba(239, 68, 68, 0.15)', borderRadius: '2px', overflow: 'hidden' }}>
-                      <div style={{ width: `${overallDebtProgress}%`, height: '100%', backgroundColor: 'var(--color-error)', borderRadius: '2px' }} />
-                    </div>
-                  </div>
-                ) : (
-                  <span className="text-label-sm" style={{ color: 'var(--color-on-surface-variant)' }}>Lleva el control de tus deudas</span>
-                )}
-              </div>
-            </div>
-            <ArrowRight size={20} color="var(--color-on-surface-variant)" />
-          </div>
-        </Link>
-      </section>
-
-
-      <section className={styles.transactionsSection}>
-        <h3 className={styles.sectionTitle}>Movimientos Recientes</h3>
-        
-        {filteredTransactions.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '48px 0', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px' }}>
-            <div style={{ width: '64px', height: '64px', borderRadius: '50%', backgroundColor: 'var(--color-surface-container-high)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <Wallet size={32} color="var(--color-on-surface-variant)" />
-            </div>
-            <h4 className="text-headline-sm">Sin movimientos</h4>
-            <p className="text-body-md" style={{ color: 'var(--color-on-surface-variant)' }}>Registra tu primer ingreso o egreso arriba.</p>
-          </div>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column' }}>
-            {filteredTransactions.map(t => (
-              <div key={t.id} className={styles.transactionCard}>
-                <div className={styles.transactionLeft}>
-                  <div className={`${styles.iconWrapper} ${t.type === 'income' ? styles.iconIncome : styles.iconExpense}`}>
-                    {t.type === 'income' ? <ArrowUpRight size={24} /> : <ArrowDownRight size={24} />}
-                  </div>
-                  <div className={styles.transactionInfo}>
-                    <span className={styles.transactionTitle}>{t.category}</span>
-                    <span className={styles.transactionDate}>
-                      {t.createdAt ? new Date(t.createdAt.toDate()).toLocaleDateString() : 'Hoy'}
-                      {t.description && ` • ${t.description}`}
-                      {t.ownerId !== user.uid && t.ownerName && ` • Por ${t.ownerName}`}
-                    </span>
-                    {t.recurringPaymentTitle && (
-                      <span style={{ fontSize: '12px', color: 'var(--color-primary)', marginTop: '2px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                        🔗 Pago: {t.recurringPaymentTitle}
-                      </span>
-                    )}
-                  </div>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                  <div className={`${styles.transactionAmount} ${t.type === 'income' ? styles.amountIncome : styles.amountExpense}`}>
-                    {t.type === 'income' ? '+' : '-'}{formatCOP(t.amount)}
-                  </div>
-                  {t.ownerId === user?.uid && (
-                    <div style={{ display: 'flex', gap: '4px' }}>
-                      <button 
-                        onClick={() => openEditTxModal(t)}
-                        style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '4px', color: 'var(--color-on-surface-variant)' }}
-                        aria-label="Editar transacción"
-                      >
-                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path></svg>
-                      </button>
-                      <button 
-                        onClick={() => { setTxToDelete(t); setIsDeleteTxModalOpen(true); }}
-                        style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '4px', color: 'var(--color-on-surface-variant)' }}
-                        aria-label="Eliminar transacción"
-                      >
-                        <Trash2 size={18} color="var(--color-error)" />
-                      </button>
-                    </div>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
-
-      <SpeedDial actions={[
-        {
-          name: 'Nuevo Egreso',
-          icon: <TrendingDown size={20} />,
-          color: '#EF4444', // Red
-          onClick: () => openModal('expense')
-        },
-        {
-          name: 'Nuevo Ingreso',
-          icon: <TrendingUp size={20} />,
-          color: '#10B981', // Emerald/Green
-          onClick: () => openModal('income')
-        }
-      ]} />
-
-      <Modal isOpen={isModalOpen} onClose={() => { setIsModalOpen(false); setEditingTxId(null); }} title={`${editingTxId ? 'Editar' : 'Nuevo'} ${transactionType === 'income' ? 'Ingreso' : 'Egreso'}`}>
-        <form onSubmit={handleAddTransaction} style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginTop: '16px' }}>
-          <Input 
-            label="Monto" 
-            type="text"
-            placeholder="Ej. 1.500.000" 
-            value={amount}
-            onChange={(e) => setAmount(formatInputCOP(e.target.value))}
-            required
-            autoFocus
-          />
-          <Input 
-            label="Fecha" 
-            type="date"
-            value={transactionDate}
-            onChange={(e) => setTransactionDate(e.target.value)}
-            required
-          />
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            <label className="text-label-md" style={{ color: 'var(--color-on-surface-variant)' }}>Categoría</label>
-            <select 
-              value={category} 
-              onChange={(e) => setCategory(e.target.value)}
-              required
+        <div
+          style={{
+            display: 'inline-flex',
+            background: 'var(--color-surface-container)',
+            borderRadius: '10px',
+            padding: '3px',
+            gap: '2px',
+          }}
+        >
+          {[
+            { id: 'all', label: 'Mes' },
+            { id: 'q1', label: '1ª Q (1-15)' },
+            { id: 'q2', label: '2ª Q (16+)' },
+          ].map((q) => (
+            <button
+              key={q.id}
+              type="button"
+              onClick={() => setQuincenaFilter(q.id as any)}
               style={{
-                width: '100%',
-                padding: '12px 16px',
-                borderRadius: 'var(--radius-md)',
-                border: '1px solid var(--color-outline)',
-                backgroundColor: 'var(--color-surface)',
-                color: 'var(--color-on-surface)',
-                fontSize: '16px',
-                outline: 'none',
-                fontFamily: 'inherit'
+                padding: '5px 8px',
+                borderRadius: '8px',
+                fontSize: '11px',
+                fontWeight: quincenaFilter === q.id ? 600 : 500,
+                backgroundColor: quincenaFilter === q.id ? 'var(--color-surface-container-lowest)' : 'transparent',
+                color: quincenaFilter === q.id ? 'var(--color-primary)' : 'var(--color-on-surface-variant)',
               }}
             >
-              <option value="" disabled>Selecciona una categoría</option>
-              {(transactionType === 'income' ? incomeCats : expenseCats).map(cat => (
-                <option key={cat} value={cat}>{cat}</option>
-              ))}
-            </select>
+              {q.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* DISPARO DE ALERTAS DE PRESUPUESTO RECIENTES (RF-08) */}
+      {recentAlerts.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '12px' }}>
+          {recentAlerts.map((al) => (
+            <div
+              key={al.alertKey}
+              style={{
+                display: 'flex',
+                alignItems: 'flex-start',
+                justifyContent: 'space-between',
+                gap: '10px',
+                padding: '12px 14px',
+                borderRadius: '12px',
+                backgroundColor:
+                  al.severity === 'danger' ? 'rgba(239, 68, 68, 0.12)' : 'rgba(245, 158, 11, 0.14)',
+                border: `1px solid ${al.severity === 'danger' ? 'var(--color-error)' : 'var(--color-warning)'}`,
+                color: 'var(--color-on-surface)',
+              }}
+            >
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
+                <AlertTriangle
+                  size={18}
+                  color={al.severity === 'danger' ? 'var(--color-error)' : 'var(--color-warning)'}
+                  style={{ flexShrink: 0, marginTop: '2px' }}
+                />
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: '13px' }}>{al.title}</div>
+                  <div style={{ fontSize: '12px' }}>{al.message}</div>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setRecentAlerts((prev) => prev.filter((x) => x.alertKey !== al.alertKey))}
+                style={{ fontSize: '14px', fontWeight: 700, padding: '0 4px' }}
+              >
+                ×
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* SUMMARY BALANCE CARD */}
+      <section>
+        <div className={styles.balanceCard} style={{ padding: '18px' }}>
+          <span className={styles.balanceTitle}>
+            Disponible del Periodo ({globalScope.toUpperCase()})
+          </span>
+          <h2
+            className={`${styles.balanceAmount} ${
+              balance >= 0 ? styles.balanceAmountPositive : styles.balanceAmountNegative
+            }`}
+          >
+            {formatCOP(balance)}
+          </h2>
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: '1fr 1fr',
+              gap: '12px',
+              marginTop: '12px',
+              paddingTop: '12px',
+              borderTop: '1px solid var(--color-outline-variant)',
+            }}
+          >
+            <div>
+              <span className="text-label-sm" style={{ color: 'var(--color-on-surface-variant)' }}>
+                Ingresos (+)
+              </span>
+              <div style={{ fontWeight: 700, color: 'var(--color-success)', fontSize: '15px' }}>
+                {formatCOP(totalIncome)}
+              </div>
+            </div>
+            <div>
+              <span className="text-label-sm" style={{ color: 'var(--color-on-surface-variant)' }}>
+                Gastos (-)
+              </span>
+              <div style={{ fontWeight: 700, color: 'var(--color-error)', fontSize: '15px' }}>
+                {formatCOP(totalExpense)}
+              </div>
+            </div>
           </div>
-          {transactionType === 'expense' && recurringPayments.length > 0 && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              <label className="text-label-md" style={{ color: 'var(--color-on-surface-variant)' }}>Asociar a Pago Programado (Opcional)</label>
-              <select 
-                value={selectedRecurringPaymentId} 
-                onChange={(e) => {
-                  const val = e.target.value;
-                  setSelectedRecurringPaymentId(val);
-                  if (val) {
-                    const pay = recurringPayments.find(p => p.id === val);
-                    if (pay && pay.amount) {
-                      setAmount(formatInputCOP(String(pay.amount)));
-                    }
-                  }
-                }}
+        </div>
+      </section>
+
+      {/* SUB-NAVIGATION PILLS (Extracto · Reportes · Pareja) */}
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(3, 1fr)',
+          gap: '6px',
+          marginTop: '14px',
+          marginBottom: '16px',
+        }}
+      >
+        {[
+          { id: 'extracto', label: 'Extracto', icon: <Receipt size={15} /> },
+          { id: 'reportes', label: 'Gráficos', icon: <BarChart3 size={15} /> },
+          { id: 'pareja', label: 'Liquidación', icon: <Scale size={15} /> },
+        ].map((tab) => {
+          const active = activeSubTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => setActiveSubTab(tab.id as FinanzasSubTab)}
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '4px',
+                padding: '10px 6px',
+                borderRadius: '12px',
+                fontSize: '12px',
+                fontWeight: active ? 700 : 500,
+                backgroundColor: active
+                  ? 'var(--color-primary-container)'
+                  : 'var(--color-surface-container-lowest)',
+                color: active ? 'var(--color-primary-dark)' : 'var(--color-on-surface-variant)',
+                border: active
+                  ? '1.5px solid var(--color-primary)'
+                  : '1px solid var(--color-outline-variant)',
+              }}
+            >
+              {tab.icon}
+              <span>{tab.label}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* =================================================================== */}
+      {/* TAB 1: EXTRACTO TIPO BANCO (RF-11)                                  */}
+      {/* =================================================================== */}
+      {activeSubTab === 'extracto' && (
+        <section style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          {/* Quick Search & Filter Row */}
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '8px',
+              padding: '12px',
+              borderRadius: '12px',
+              backgroundColor: 'var(--color-surface-container-lowest)',
+              boxShadow: 'var(--shadow-level-1)',
+            }}
+          >
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <div
                 style={{
-                  width: '100%',
-                  padding: '12px 16px',
-                  borderRadius: 'var(--radius-md)',
-                  border: '1px solid var(--color-outline)',
-                  backgroundColor: 'var(--color-surface)',
-                  color: 'var(--color-on-surface)',
-                  fontSize: '16px',
-                  outline: 'none',
-                  fontFamily: 'inherit'
+                  flex: 1,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  padding: '8px 12px',
+                  borderRadius: '10px',
+                  backgroundColor: 'var(--color-surface-container-low)',
                 }}
               >
-                <option value="">Ninguno</option>
-                {recurringPayments.map(p => (
-                  <option key={p.id} value={p.id}>{p.title}</option>
+                <Search size={16} color="var(--color-on-surface-variant)" />
+                <input
+                  type="text"
+                  placeholder="Buscar comercio, categoría, #tag o nota..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  style={{
+                    border: 'none',
+                    background: 'transparent',
+                    width: '100%',
+                    fontSize: '13px',
+                    outline: 'none',
+                  }}
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowRunningBalance(!showRunningBalance)}
+                style={{
+                  padding: '8px 10px',
+                  borderRadius: '10px',
+                  fontSize: '11px',
+                  fontWeight: 600,
+                  backgroundColor: showRunningBalance
+                    ? 'var(--color-primary-container)'
+                    : 'var(--color-surface-container-low)',
+                  color: showRunningBalance
+                    ? 'var(--color-primary-dark)'
+                    : 'var(--color-on-surface-variant)',
+                }}
+              >
+                Saldo Acum.
+              </button>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+              <select
+                value={selectedCategoryFilter}
+                onChange={(e) => setSelectedCategoryFilter(e.target.value)}
+                style={{
+                  padding: '7px 10px',
+                  borderRadius: '8px',
+                  border: '1px solid var(--color-outline-variant)',
+                  fontSize: '12px',
+                  backgroundColor: 'var(--color-surface)',
+                }}
+              >
+                <option value="">Todas las categorías</option>
+                {categories.map((c) => (
+                  <option key={c.id} value={c.name}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+
+              <select
+                value={selectedMethodFilter}
+                onChange={(e) => setSelectedMethodFilter(e.target.value)}
+                style={{
+                  padding: '7px 10px',
+                  borderRadius: '8px',
+                  border: '1px solid var(--color-outline-variant)',
+                  fontSize: '12px',
+                  backgroundColor: 'var(--color-surface)',
+                }}
+              >
+                <option value="">Todos los métodos</option>
+                {paymentMethods.map((pm) => (
+                  <option key={pm.id} value={pm.id}>
+                    {pm.alias} ({pm.holderName || 'Hogar'})
+                  </option>
                 ))}
               </select>
             </div>
+          </div>
+
+          {/* Grouped Daily Bank Ledger */}
+          {groupedLedgerDays.length === 0 ? (
+            <Card style={{ textAlign: 'center', padding: '40px 16px' }}>
+              <Wallet size={32} color="var(--color-on-surface-variant)" style={{ margin: '0 auto 8px' }} />
+              <h4 className="text-headline-sm">Sin movimientos en este filtro</h4>
+              <p className="text-body-sm" style={{ color: 'var(--color-on-surface-variant)', marginTop: '4px' }}>
+                Usa el botón "+" para registrar un gasto o ingreso en menos de 15 segundos.
+              </p>
+            </Card>
+          ) : (
+            groupedLedgerDays.slice(0, visibleDaysLimit).map((dayGroup) => (
+              <div
+                key={dayGroup.dateKey}
+                style={{
+                  backgroundColor: 'var(--color-surface-container-lowest)',
+                  borderRadius: '14px',
+                  boxShadow: 'var(--shadow-level-1)',
+                  overflow: 'hidden',
+                }}
+              >
+                {/* Day Header */}
+                <div
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    padding: '10px 14px',
+                    backgroundColor: 'var(--color-surface-container-low)',
+                    borderBottom: '1px solid var(--color-outline-variant)',
+                    fontSize: '12px',
+                    fontWeight: 600,
+                    textTransform: 'capitalize',
+                  }}
+                >
+                  <span>{dayGroup.dateLabel}</span>
+                  <span
+                    style={{
+                      color:
+                        dayGroup.dailyNet >= 0 ? 'var(--color-success)' : 'var(--color-on-surface-variant)',
+                    }}
+                  >
+                    Total día: {dayGroup.dailyNet >= 0 ? '+' : ''}
+                    {formatCOP(dayGroup.dailyNet)}
+                  </span>
+                </div>
+
+                {/* Day Transactions */}
+                <div>
+                  {dayGroup.items.map((t) => {
+                    const scope = resolveTxScope(t);
+                    const payerName =
+                      t.paidByName ||
+                      (t.ownerId === user.uid ? 'Yo' : t.ownerName || partner?.displayName || 'Pareja');
+                    return (
+                      <div
+                        key={t.id}
+                        onClick={() => setInspectingTx(t)}
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          padding: '12px 14px',
+                          borderBottom: '1px solid var(--color-surface-container)',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1 }}>
+                          <div
+                            className={`${styles.iconWrapper} ${
+                              t.type === 'income' ? styles.iconIncome : styles.iconExpense
+                            }`}
+                            style={{ width: '38px', height: '38px', flexShrink: 0 }}
+                          >
+                            {t.type === 'income' ? (
+                              <ArrowUpRight size={20} />
+                            ) : (
+                              <ArrowDownRight size={20} />
+                            )}
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                              <span style={{ fontWeight: 600, fontSize: '14px' }}>
+                                {t.place || t.description || t.title || t.category}
+                              </span>
+                              <span
+                                style={{
+                                  fontSize: '10px',
+                                  padding: '1px 6px',
+                                  borderRadius: '999px',
+                                  backgroundColor:
+                                    scope === 'conjunto'
+                                      ? 'rgba(59, 130, 246, 0.12)'
+                                      : 'var(--color-surface-container)',
+                                  color:
+                                    scope === 'conjunto'
+                                      ? 'var(--color-primary-dark)'
+                                      : 'var(--color-on-surface-variant)',
+                                  fontWeight: 600,
+                                }}
+                              >
+                                {scope === 'conjunto' ? 'Conjunto' : 'Personal'}
+                              </span>
+                              {t.attachments && t.attachments.length > 0 && (
+                                <ImageIcon size={13} color="var(--color-primary)" />
+                              )}
+                            </div>
+
+                            <div
+                              style={{
+                                fontSize: '12px',
+                                color: 'var(--color-on-surface-variant)',
+                                display: 'flex',
+                                flexWrap: 'wrap',
+                                gap: '4px',
+                              }}
+                            >
+                              <span>{t.category}</span>
+                              <span>• Pagó: {payerName}</span>
+                              {t.paymentMethodAlias && <span>• {t.paymentMethodAlias}</span>}
+                            </div>
+
+                            {t.tags && t.tags.length > 0 && (
+                              <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginTop: '2px' }}>
+                                {t.tags.map((tg) => (
+                                  <span
+                                    key={tg}
+                                    style={{
+                                      fontSize: '10px',
+                                      color: 'var(--color-primary)',
+                                      backgroundColor: 'var(--color-primary-container)',
+                                      padding: '1px 6px',
+                                      borderRadius: '4px',
+                                    }}
+                                  >
+                                    #{tg}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        <div style={{ textAlign: 'right', marginLeft: '8px' }}>
+                          <div
+                            style={{
+                              fontWeight: 700,
+                              fontSize: '14px',
+                              color:
+                                t.type === 'income' ? 'var(--color-success)' : 'var(--color-error)',
+                            }}
+                          >
+                            {t.type === 'income' ? '+' : '-'}
+                            {formatCOP(t.amount)}
+                          </div>
+                          {showRunningBalance && (
+                            <div style={{ fontSize: '10px', color: 'var(--color-on-surface-variant)' }}>
+                              Saldo: {formatCOP(t.runningBalance)}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))
           )}
-          {category === 'Otro' && (
-            <Input 
-              label="Escribe tu categoría" 
-              placeholder="Ej. Regalo, Inversión..." 
-              value={customCategory}
-              onChange={(e) => setCustomCategory(e.target.value)}
-              required
-            />
+
+          {groupedLedgerDays.length > visibleDaysLimit && (
+            <Button
+              variant="secondary"
+              fullWidth
+              onClick={() => setVisibleDaysLimit((prev) => prev + 15)}
+            >
+              Ver más días del historial
+            </Button>
           )}
-          <Input 
-            label="Nota (Opcional)" 
-            placeholder="Algún detalle extra..." 
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-          />
-          <Button 
-            type="submit" 
-            variant="primary" 
-            fullWidth 
-            disabled={!amount || !category || (category === 'Otro' && !customCategory) || isSubmitting}
-            style={{ marginTop: '8px' }}
-          >
-            {isSubmitting ? 'Guardando...' : 'Guardar'}
-          </Button>
-        </form>
+
+          {/* Quick Links to Savings & Debts */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginTop: '8px' }}>
+            <Link href="/finanzas/metas" style={{ textDecoration: 'none' }}>
+              <Card style={{ padding: '14px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+                  <PiggyBank size={18} color="var(--color-success)" />
+                  <span style={{ fontWeight: 600, fontSize: '13px' }}>Metas Ahorro</span>
+                </div>
+                <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--color-success)' }}>
+                  {formatCOP(totalSavingsCurrent)} ({overallSavingsProgress}%)
+                </div>
+              </Card>
+            </Link>
+            <Link href="/finanzas/deudas" style={{ textDecoration: 'none' }}>
+              <Card style={{ padding: '14px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+                  <Target size={18} color="var(--color-error)" />
+                  <span style={{ fontWeight: 600, fontSize: '13px' }}>Deudas Externas</span>
+                </div>
+                <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--color-error)' }}>
+                  {formatCOP(totalDebtRemaining)}
+                </div>
+              </Card>
+            </Link>
+          </div>
+        </section>
+      )}
+
+      {/* =================================================================== */}
+      {/* TAB 2: GRÁFICOS Y REPORTES COMPARATIVOS (RF-09)                     */}
+      {/* =================================================================== */}
+      {activeSubTab === 'reportes' && (
+        <section style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          {/* Comparativo con el mes anterior */}
+          <Card style={{ padding: '16px' }}>
+            <h4 className="text-body-lg" style={{ fontWeight: 700, marginBottom: '8px' }}>
+              Comparativo vs. Mes Anterior
+            </h4>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+              <div>
+                <span className="text-label-sm" style={{ color: 'var(--color-on-surface-variant)' }}>
+                  Gasto Mes Actual
+                </span>
+                <div style={{ fontSize: '18px', fontWeight: 700, color: 'var(--color-error)' }}>
+                  {formatCOP(totalExpense)}
+                </div>
+              </div>
+              <div>
+                <span className="text-label-sm" style={{ color: 'var(--color-on-surface-variant)' }}>
+                  Gasto Mes Anterior
+                </span>
+                <div style={{ fontSize: '18px', fontWeight: 700 }}>
+                  {formatCOP(prevMonthExpense)}
+                </div>
+              </div>
+            </div>
+            {prevMonthExpense > 0 && (
+              <p style={{ fontSize: '12px', marginTop: '8px', color: 'var(--color-on-surface-variant)' }}>
+                Variación:{' '}
+                <strong>
+                  {Math.round(((totalExpense - prevMonthExpense) / prevMonthExpense) * 100)}%
+                </strong>{' '}
+                respecto al periodo anterior.
+              </p>
+            )}
+          </Card>
+
+          {/* Gráfico de Gastos por Categoría */}
+          <Card style={{ padding: '16px' }}>
+            <h4 className="text-body-lg" style={{ fontWeight: 700, marginBottom: '12px' }}>
+              Distribución por Categoría
+            </h4>
+            {categoryBreakdown.length === 0 ? (
+              <p className="text-body-sm" style={{ color: 'var(--color-on-surface-variant)' }}>
+                No hay gastos registrados en este periodo.
+              </p>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                {categoryBreakdown.map((item) => {
+                  const pct = totalExpense > 0 ? Math.round((item.amount / totalExpense) * 100) : 0;
+                  return (
+                    <div key={item.name}>
+                      <div
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          fontSize: '13px',
+                          marginBottom: '4px',
+                        }}
+                      >
+                        <span style={{ fontWeight: 600 }}>{item.name}</span>
+                        <span>
+                          {formatCOP(item.amount)} ({pct}%)
+                        </span>
+                      </div>
+                      <div
+                        style={{
+                          width: '100%',
+                          height: '8px',
+                          borderRadius: '999px',
+                          backgroundColor: 'var(--color-surface-container)',
+                          overflow: 'hidden',
+                        }}
+                      >
+                        <div
+                          style={{
+                            width: `${pct}%`,
+                            height: '100%',
+                            backgroundColor: item.color,
+                          }}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </Card>
+
+          {/* Gráfico de Gastos por Tag */}
+          <Card style={{ padding: '16px' }}>
+            <h4 className="text-body-lg" style={{ fontWeight: 700, marginBottom: '12px' }}>
+              Gastos por #Tag Transversal
+            </h4>
+            {tagBreakdown.length === 0 ? (
+              <p className="text-body-sm" style={{ color: 'var(--color-on-surface-variant)' }}>
+                Agrega tags como #mercado o #dolarcity a tus gastos para ver esta métrica.
+              </p>
+            ) : (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                {tagBreakdown.map((tg) => (
+                  <div
+                    key={tg.name}
+                    style={{
+                      padding: '8px 12px',
+                      borderRadius: '10px',
+                      backgroundColor: 'var(--color-surface-container-low)',
+                      fontSize: '13px',
+                    }}
+                  >
+                    <strong style={{ color: 'var(--color-primary-dark)' }}>#{tg.name}</strong>:{' '}
+                    {formatCOP(tg.amount)}
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card>
+        </section>
+      )}
+
+      {/* =================================================================== */}
+      {/* TAB 4: BALANCE Y LIQUIDACIÓN ENTRE LA PAREJA (RF-12)                */}
+      {/* =================================================================== */}
+      {activeSubTab === 'pareja' && partnerBalance && (
+        <section style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          <Card style={{ padding: '18px', textAlign: 'center' }}>
+            <span className="text-label-md" style={{ color: 'var(--color-on-surface-variant)' }}>
+              Estado de Cuentas en Gastos Conjuntos (
+              {partnerBalance.splitRule === '50_50' ? 'Reparto 50/50' : 'Reparto Proporcional'})
+            </span>
+
+            {partnerBalance.netAmountOwed === 0 ? (
+              <div style={{ margin: '16px 0' }}>
+                <CheckCircle2
+                  size={36}
+                  color="var(--color-success)"
+                  style={{ margin: '0 auto 8px' }}
+                />
+                <h3 className="text-headline-sm">¡Están a paz y salvo!</h3>
+                <p className="text-body-sm" style={{ color: 'var(--color-on-surface-variant)' }}>
+                  No hay saldo pendiente por liquidar en este periodo.
+                </p>
+              </div>
+            ) : (
+              <div style={{ margin: '16px 0' }}>
+                <h3 className="text-headline-md" style={{ color: 'var(--color-primary-dark)' }}>
+                  {partnerBalance.debtorName} le debe a {partnerBalance.creditorName}
+                </h3>
+                <div
+                  style={{
+                    fontSize: '28px',
+                    fontWeight: 800,
+                    color: 'var(--color-on-surface)',
+                    margin: '6px 0 14px',
+                  }}
+                >
+                  {formatCOP(partnerBalance.netAmountOwed)}
+                </div>
+                <Button
+                  variant="primary"
+                  onClick={() => {
+                    setSettlementAmount(formatInputCOP(String(partnerBalance.netAmountOwed)));
+                    setIsSettlementModalOpen(true);
+                  }}
+                >
+                  Registrar Liquidación (Saldar Deuda)
+                </Button>
+              </div>
+            )}
+
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: '1fr 1fr',
+                gap: '10px',
+                paddingTop: '12px',
+                borderTop: '1px solid var(--color-outline-variant)',
+                textAlign: 'left',
+                fontSize: '12px',
+              }}
+            >
+              <div>
+                <div style={{ color: 'var(--color-on-surface-variant)' }}>
+                  Pagado por {partnerBalance.userAName}
+                </div>
+                <div style={{ fontWeight: 700, fontSize: '14px' }}>
+                  {formatCOP(partnerBalance.paidByA)}
+                </div>
+                <div style={{ fontSize: '11px', color: 'var(--color-on-surface-variant)' }}>
+                  Le corresponde: {formatCOP(partnerBalance.shouldPayA)}
+                </div>
+              </div>
+              <div>
+                <div style={{ color: 'var(--color-on-surface-variant)' }}>
+                  Pagado por {partnerBalance.userBName}
+                </div>
+                <div style={{ fontWeight: 700, fontSize: '14px' }}>
+                  {formatCOP(partnerBalance.paidByB)}
+                </div>
+                <div style={{ fontSize: '11px', color: 'var(--color-on-surface-variant)' }}>
+                  Le corresponde: {formatCOP(partnerBalance.shouldPayB)}
+                </div>
+              </div>
+            </div>
+          </Card>
+
+          {settlements.length > 0 && (
+            <Card style={{ padding: '16px' }}>
+              <h4 className="text-body-md" style={{ fontWeight: 700, marginBottom: '10px' }}>
+                Historial de Liquidaciones entre Ustedes
+              </h4>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {settlements.map((s) => (
+                  <div
+                    key={s.id}
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      padding: '8px 10px',
+                      borderRadius: '8px',
+                      backgroundColor: 'var(--color-surface-container-low)',
+                      fontSize: '13px',
+                    }}
+                  >
+                    <div>
+                      <strong>{s.fromUserName}</strong> pagó a <strong>{s.toUserName}</strong>
+                      {s.note && (
+                        <div style={{ fontSize: '11px', color: 'var(--color-on-surface-variant)' }}>
+                          {s.note}
+                        </div>
+                      )}
+                    </div>
+                    <strong style={{ color: 'var(--color-success)' }}>{formatCOP(s.amount)}</strong>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
+        </section>
+      )}
+
+      {/* FLOATING SPEED DIAL */}
+      <SpeedDial
+        actions={[
+          {
+            name: 'Nuevo Gasto',
+            icon: <TrendingDown size={20} />,
+            color: '#EF4444',
+            onClick: () => {
+              setEditingTx(null);
+              setQuickModalType('expense');
+              setIsQuickModalOpen(true);
+            },
+          },
+          {
+            name: 'Nuevo Ingreso',
+            icon: <TrendingUp size={20} />,
+            color: '#10B981',
+            onClick: () => {
+              setEditingTx(null);
+              setQuickModalType('income');
+              setIsQuickModalOpen(true);
+            },
+          },
+        ]}
+      />
+
+      {/* ONE-STEP QUICK MOVEMENT MODAL */}
+      <QuickMovementModal
+        isOpen={isQuickModalOpen}
+        onClose={() => {
+          setIsQuickModalOpen(false);
+          setEditingTx(null);
+        }}
+        initialType={quickModalType}
+        editingTransaction={editingTx}
+        knownTransactions={transactions}
+        recurringPayments={recurringPayments}
+        activeBudgets={budgets}
+        onAlertsTriggered={(alerts) => setRecentAlerts(alerts)}
+      />
+
+      {/* HOUSEHOLD, CARDS & CATEGORIES CONFIG MODAL */}
+      <HouseholdConfigModal
+        isOpen={isConfigModalOpen}
+        onClose={() => setIsConfigModalOpen(false)}
+        initialTab={configInitialTab}
+      />
+
+      {/* BUDGET MANAGER MODAL */}
+      <BudgetManagerModal
+        isOpen={isBudgetModalOpen}
+        onClose={() => setIsBudgetModalOpen(false)}
+        currentDate={currentDate}
+        existingBudget={currentBudgetDoc}
+        allBudgets={budgets}
+      />
+
+      {/* TRANSACTION DETAIL & RECEIPT INSPECTION MODAL */}
+      <Modal
+        isOpen={Boolean(inspectingTx)}
+        onClose={() => setInspectingTx(null)}
+        title="Detalle del Movimiento"
+      >
+        {inspectingTx && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '8px' }}>
+            <div style={{ textAlign: 'center', padding: '12px 0' }}>
+              <div
+                style={{
+                  fontSize: '26px',
+                  fontWeight: 800,
+                  color:
+                    inspectingTx.type === 'income' ? 'var(--color-success)' : 'var(--color-error)',
+                }}
+              >
+                {inspectingTx.type === 'income' ? '+' : '-'}
+                {formatCOP(inspectingTx.amount)}
+              </div>
+              <div style={{ fontSize: '15px', fontWeight: 600, marginTop: '4px' }}>
+                {inspectingTx.place || inspectingTx.description || inspectingTx.category}
+              </div>
+            </div>
+
+            <div
+              style={{
+                padding: '12px',
+                borderRadius: '10px',
+                backgroundColor: 'var(--color-surface-container-low)',
+                fontSize: '13px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '6px',
+              }}
+            >
+              <div>
+                <strong>Categoría:</strong> {inspectingTx.category}
+              </div>
+              <div>
+                <strong>Ámbito:</strong>{' '}
+                {resolveTxScope(inspectingTx) === 'conjunto' ? 'Conjunto (Hogar)' : 'Personal'}
+              </div>
+              <div>
+                <strong>Pagado / Registrado por:</strong>{' '}
+                {inspectingTx.paidByName || inspectingTx.ownerName || 'Miembro del hogar'}
+              </div>
+              {inspectingTx.paymentMethodAlias && (
+                <div>
+                  <strong>Método de pago:</strong> {inspectingTx.paymentMethodAlias}
+                </div>
+              )}
+              {inspectingTx.note && (
+                <div>
+                  <strong>Nota:</strong> {inspectingTx.note}
+                </div>
+              )}
+            </div>
+
+            {inspectingTx.attachments && inspectingTx.attachments.length > 0 && (
+              <div>
+                <span className="text-label-sm">Comprobante(s) adjuntos:</span>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '6px' }}>
+                  {inspectingTx.attachments.map((att) => (
+                    <a
+                      key={att.id}
+                      href={att.secureUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      style={{ display: 'block', borderRadius: '12px', overflow: 'hidden' }}
+                    >
+                      <img
+                        src={att.secureUrl}
+                        alt="Comprobante"
+                        style={{ width: '100%', maxHeight: '300px', objectFit: 'contain' }}
+                      />
+                    </a>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: '10px', marginTop: '8px' }}>
+              <Button
+                type="button"
+                variant="secondary"
+                fullWidth
+                onClick={() => {
+                  const tx = inspectingTx;
+                  setInspectingTx(null);
+                  setEditingTx(tx);
+                  setIsQuickModalOpen(true);
+                }}
+              >
+                Editar
+              </Button>
+              <Button
+                type="button"
+                variant="danger"
+                fullWidth
+                onClick={() => {
+                  const tx = inspectingTx;
+                  setInspectingTx(null);
+                  setTxToDelete(tx);
+                }}
+              >
+                Eliminar
+              </Button>
+            </div>
+          </div>
+        )}
       </Modal>
 
-      {/* Share Modal */}
-      <Modal isOpen={isShareModalOpen} onClose={() => !isSharing && setIsShareModalOpen(false)} title="Compartir Finanzas">
-        <div style={{ marginBottom: '16px', marginTop: '8px' }}>
-          <p className="text-body-sm" style={{ color: 'var(--color-on-surface-variant)' }}>
-            Escribe el correo electrónico de la persona con la que quieres compartir este módulo. 
-            <strong> Nota:</strong> Deben haber iniciado sesión en la app previamente.
-          </p>
-        </div>
-        <form onSubmit={handleShareFinance}>
-          <div style={{ marginBottom: '24px' }}>
-            <UserEmailAutocomplete 
-              value={shareEmail}
-              onChange={(val) => setShareEmail(val)}
-              autoFocus
-            />
-          </div>
-          <div style={{ display: 'flex', gap: '12px' }}>
-            <Button type="button" variant="ghost" fullWidth onClick={() => setIsShareModalOpen(false)} disabled={isSharing}>
-              Cancelar
-            </Button>
-            <Button type="submit" variant="primary" fullWidth disabled={!shareEmail.trim() || isSharing}>
-              {isSharing ? 'Buscando...' : 'Compartir'}
-            </Button>
-          </div>
-        </form>
-      </Modal>
-
-      {/* Delete Transaction Modal */}
-      <Modal isOpen={isDeleteTxModalOpen} onClose={() => !isDeletingTx && setIsDeleteTxModalOpen(false)} title="Eliminar Movimiento">
-        <div style={{ marginBottom: '24px', marginTop: '8px' }}>
-          <p className="text-body-md" style={{ color: 'var(--color-on-surface-variant)' }}>
-            ¿Estás seguro de que deseas eliminar este movimiento? Se actualizará tu balance automáticamente.
-          </p>
-        </div>
-        <div style={{ display: 'flex', gap: '12px' }}>
-          <Button type="button" variant="ghost" fullWidth onClick={() => setIsDeleteTxModalOpen(false)} disabled={isDeletingTx}>
+      {/* SOFT DELETE CONFIRMATION MODAL */}
+      <Modal
+        isOpen={Boolean(txToDelete)}
+        onClose={() => !isDeletingTx && setTxToDelete(null)}
+        title="Eliminar Movimiento"
+      >
+        <p className="text-body-md" style={{ margin: '12px 0 20px', color: 'var(--color-on-surface-variant)' }}>
+          ¿Confirmas eliminar este movimiento? Se aplicará eliminación lógica (soft delete) y se actualizará el balance del hogar.
+        </p>
+        <div style={{ display: 'flex', gap: '10px' }}>
+          <Button type="button" variant="ghost" fullWidth onClick={() => setTxToDelete(null)}>
             Cancelar
           </Button>
-          <Button type="button" variant="danger" fullWidth onClick={handleDeleteTransaction} disabled={isDeletingTx}>
+          <Button
+            type="button"
+            variant="danger"
+            fullWidth
+            onClick={handleSoftDeleteTransaction}
+            disabled={isDeletingTx}
+          >
             {isDeletingTx ? 'Eliminando...' : 'Sí, eliminar'}
           </Button>
         </div>
       </Modal>
 
-
-
-      {/* Category Management Modal */}
-      <Modal isOpen={isCategoriesModalOpen} onClose={() => setIsCategoriesModalOpen(false)} title="Tus Categorías">
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', marginTop: '16px' }}>
-          <form onSubmit={handleAddCategory} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            <div>
-              <Input 
-                label="Nueva Categoría" 
-                placeholder="Ej. Veterinaria" 
-                value={newCatName}
-                onChange={(e) => setNewCatName(e.target.value)}
-              />
-            </div>
-            <div>
-              <label className="text-label-md" style={{ color: 'var(--color-on-surface-variant)' }}>Tipo</label>
-              <select 
-                value={newCatType} 
-                onChange={(e) => setNewCatType(e.target.value as 'income' | 'expense')}
-                style={{
-                  width: '100%',
-                  padding: '12px 16px',
-                  borderRadius: 'var(--radius-md)',
-                  border: '1px solid var(--color-outline)',
-                  backgroundColor: 'var(--color-surface)',
-                  color: 'var(--color-on-surface)',
-                  fontSize: '16px',
-                  outline: 'none',
-                  fontFamily: 'inherit',
-                  marginTop: '4px'
-                }}
-              >
-                <option value="expense">Egreso</option>
-                <option value="income">Ingreso</option>
-              </select>
-            </div>
-            <Button type="submit" variant="primary" fullWidth disabled={!newCatName.trim() || isAddingCat} style={{ padding: '12px' }}>
-              {isAddingCat ? 'Agregando...' : 'Agregar Categoría'}
+      {/* SETTLEMENT MODAL (RF-12) */}
+      <Modal
+        isOpen={isSettlementModalOpen}
+        onClose={() => setIsSettlementModalOpen(false)}
+        title="Registrar Liquidación en Pareja"
+      >
+        <form
+          onSubmit={handleRecordSettlement}
+          style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginTop: '8px' }}
+        >
+          <p className="text-body-sm" style={{ color: 'var(--color-on-surface-variant)' }}>
+            Registra el pago entre <strong>{partnerBalance?.debtorName}</strong> y{' '}
+            <strong>{partnerBalance?.creditorName}</strong> para saldar los gastos conjuntos.
+          </p>
+          <Input
+            label="Monto a liquidar ($)"
+            value={settlementAmount}
+            onChange={(e) => setSettlementAmount(formatInputCOP(e.target.value))}
+            required
+          />
+          <Input
+            label="Nota (Ej. Transferencia Nequi)"
+            placeholder="Opcional..."
+            value={settlementNote}
+            onChange={(e) => setSettlementNote(e.target.value)}
+          />
+          <div style={{ display: 'flex', gap: '10px' }}>
+            <Button
+              type="button"
+              variant="ghost"
+              fullWidth
+              onClick={() => setIsSettlementModalOpen(false)}
+            >
+              Cancelar
             </Button>
-          </form>
-
-          <div>
-            <h4 className="text-label-lg" style={{ marginBottom: '8px', color: 'var(--color-on-surface-variant)' }}>Categorías Creadas</h4>
-            {customCategories.length === 0 ? (
-              <p className="text-body-sm" style={{ color: 'var(--color-on-surface-variant)' }}>No has creado ninguna categoría extra.</p>
-            ) : (
-              <ul style={{ display: 'flex', flexDirection: 'column', gap: '8px', listStyle: 'none', padding: 0 }}>
-                {customCategories.map(cat => (
-                  <li key={cat.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px', background: 'var(--color-surface-container-low)', borderRadius: 'var(--radius-sm)' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <span className="text-body-md" style={{ fontWeight: 500 }}>{cat.name}</span>
-                      <span className="text-label-sm" style={{ color: cat.type === 'income' ? '#10B981' : '#EF4444', background: cat.type === 'income' ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)', padding: '2px 6px', borderRadius: '4px' }}>
-                        {cat.type === 'income' ? 'Ingreso' : 'Egreso'}
-                      </span>
-                    </div>
-                    <button onClick={() => handleDeleteCategory(cat.id)} style={{ background: 'none', border: 'none', color: 'var(--color-error)', cursor: 'pointer', padding: '4px' }}>
-                      <Trash2 size={18} />
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
+            <Button type="submit" variant="primary" fullWidth disabled={isSavingSettlement}>
+              {isSavingSettlement ? 'Guardando...' : 'Confirmar Pago'}
+            </Button>
           </div>
-        </div>
+        </form>
       </Modal>
-
     </main>
   );
 }
