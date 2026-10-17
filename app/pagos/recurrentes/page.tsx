@@ -574,6 +574,11 @@ export default function RecurringPayments() {
                 size="sm"
               />
             )}
+            <Link href="/finanzas/deudas">
+              <Button variant="secondary" size="sm" title="Deudas de Tarjetas y Abonos">
+                <CreditCard size={15} style={{ marginRight: '4px' }} /> Deudas TC
+              </Button>
+            </Link>
             <Button
               variant="primary"
               size="sm"

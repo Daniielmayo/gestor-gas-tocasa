@@ -31,6 +31,7 @@ import {
   ArrowRight,
   AlertTriangle,
   Settings,
+  CreditCard,
 } from 'lucide-react';
 import styles from './dashboard.module.css';
 import { useAuth } from '@/context/AuthContext';
@@ -50,7 +51,7 @@ import {
   increment,
 } from 'firebase/firestore';
 import { formatCOP } from '@/lib/currency';
-import { BudgetDoc, EnhancedTransaction, Scope, SettlementDoc } from '@/lib/models';
+import { BudgetDoc, DebtDoc, EnhancedTransaction, Scope, SettlementDoc } from '@/lib/models';
 import { evaluateBudgetStatus, getPeriodKey, TriggeredBudgetAlert } from '@/lib/budgetEngine';
 import { calculatePartnerBalance } from '@/lib/balanceEngine';
 
@@ -79,6 +80,7 @@ export default function Dashboard() {
   const [budgets, setBudgets] = useState<BudgetDoc[]>([]);
   const [settlements, setSettlements] = useState<SettlementDoc[]>([]);
   const [savings, setSavings] = useState<any[]>([]);
+  const [debts, setDebts] = useState<DebtDoc[]>([]);
   const [isLoadingFinances, setIsLoadingFinances] = useState(true);
   const [paidPaymentIds, setPaidPaymentIds] = useState<Set<string>>(new Set());
 
@@ -228,6 +230,18 @@ export default function Dashboard() {
       setSavings(svList);
     });
 
+    // 7. Subscribe to credit card debts
+    const debtsRef = collection(db, 'debts');
+    const qDebts = query(
+      debtsRef,
+      or(where('ownerId', '==', user.uid), where('sharedWith', 'array-contains', user.uid))
+    );
+    const unsubDebts = onSnapshot(qDebts, (snapshot) => {
+      const dList: DebtDoc[] = [];
+      snapshot.forEach((d) => dList.push({ ...(d.data() as DebtDoc), id: d.id }));
+      setDebts(dList);
+    });
+
     return () => {
       unsubLists();
       unsubPayments();
@@ -235,6 +249,7 @@ export default function Dashboard() {
       unsubBudgets();
       unsubSettle();
       unsubSav();
+      unsubDebts();
     };
   }, [user]);
 
@@ -431,6 +446,19 @@ export default function Dashboard() {
   const savingsPct =
     totalSavingsTarget > 0 ? Math.min(100, Math.round((totalSavingsCurrent / totalSavingsTarget) * 100)) : 0;
 
+  const scopedDebts = debts.filter((d) => {
+    const dScope = d.scope || (d.sharedWith && d.sharedWith.length > 0 ? 'conjunto' : 'personal');
+    if (globalScope === 'mio') return d.ownerId === user.uid;
+    if (globalScope === 'pareja' && partnerUid) return d.ownerId === partnerUid;
+    if (globalScope === 'conjunto') return dScope === 'conjunto';
+    return true;
+  });
+  const totalDebtTarget = scopedDebts.reduce((s, d) => s + Number(d.targetAmount || 0), 0);
+  const totalDebtPaid = scopedDebts.reduce((s, d) => s + Number(d.currentAmount || 0), 0);
+  const totalDebtRemaining = Math.max(0, totalDebtTarget - totalDebtPaid);
+  const debtPaidPct =
+    totalDebtTarget > 0 ? Math.min(100, Math.round((totalDebtPaid / totalDebtTarget) * 100)) : 0;
+
   return (
     <main className={`container ${styles.main}`}>
       {/* Header */}
@@ -557,21 +585,43 @@ export default function Dashboard() {
               className="text-label-md"
               style={{ color: 'var(--color-primary-container)', opacity: 0.9 }}
             >
-              Balance del Mes ({globalScope.toUpperCase()})
+              Balance General del Mes ({globalScope.toUpperCase()})
             </span>
             <h2 className="text-display-lg" style={{ color: '#FFF' }}>
               {formatCOP(currentMonthBalance)}
             </h2>
             <div
               style={{
-                background: 'rgba(255,255,255,0.12)',
-                padding: '4px 12px',
-                borderRadius: '16px',
+                display: 'flex',
+                gap: '8px',
+                flexWrap: 'wrap',
+                justifyContent: 'center',
               }}
             >
-              <span className="text-label-sm" style={{ color: 'rgba(255,255,255,0.85)' }}>
-                Mes anterior: {formatCOP(prevMonthBalance)}
-              </span>
+              <div
+                style={{
+                  background: 'rgba(255,255,255,0.12)',
+                  padding: '4px 12px',
+                  borderRadius: '16px',
+                }}
+              >
+                <span className="text-label-sm" style={{ color: 'rgba(255,255,255,0.85)' }}>
+                  Mes anterior: {formatCOP(prevMonthBalance)}
+                </span>
+              </div>
+              <Link
+                href="/finanzas/deudas"
+                style={{
+                  background: 'rgba(255,255,255,0.18)',
+                  padding: '4px 12px',
+                  borderRadius: '16px',
+                  textDecoration: 'none',
+                }}
+              >
+                <span className="text-label-sm" style={{ color: '#FFFFFF', fontWeight: 600 }}>
+                  Deuda Tarjetas: {formatCOP(totalDebtRemaining)} ({debtPaidPct}% abonado)
+                </span>
+              </Link>
             </div>
 
             <div style={{ display: 'flex', gap: '10px', marginTop: '10px', width: '100%' }}>
@@ -624,20 +674,22 @@ export default function Dashboard() {
         )}
       </Card>
 
-      {/* Dashboard Widgets: Budget Progress + Partner Balance + Savings */}
+      {/* Dashboard Widgets: Credit Card Debts & Abonos + Partner Balance + Savings */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '16px' }}>
-        {/* Budget Summary Widget (RF-07 / RF-08) */}
-        <Link href="/finanzas" style={{ textDecoration: 'none' }}>
+        {/* Credit Card Debts & Abonos Widget */}
+        <Link href="/finanzas/deudas" style={{ textDecoration: 'none' }}>
           <Card style={{ padding: '14px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <Target size={18} color="var(--color-primary)" />
-                <span style={{ fontWeight: 700, fontSize: '14px' }}>Presupuesto del Periodo</span>
+                <CreditCard size={18} color="var(--color-primary)" />
+                <span style={{ fontWeight: 600, fontSize: '14px' }}>
+                  Mis Deudas de Tarjetas de Crédito y Abonos
+                </span>
               </div>
               <ArrowRight size={16} color="var(--color-on-surface-variant)" />
             </div>
 
-            {activeBudgetStatus ? (
+            {scopedDebts.length > 0 ? (
               <div style={{ marginTop: '10px' }}>
                 <div
                   style={{
@@ -650,14 +702,10 @@ export default function Dashboard() {
                 >
                   <div
                     style={{
-                      width: `${Math.min(100, activeBudgetStatus.totalPercentage)}%`,
+                      width: `${debtPaidPct}%`,
                       height: '100%',
                       backgroundColor:
-                        activeBudgetStatus.statusColor === 'red'
-                          ? 'var(--color-error)'
-                          : activeBudgetStatus.statusColor === 'yellow'
-                          ? 'var(--color-warning)'
-                          : 'var(--color-success)',
+                        debtPaidPct >= 100 ? 'var(--color-success)' : 'var(--color-primary)',
                     }}
                   />
                 </div>
@@ -668,33 +716,30 @@ export default function Dashboard() {
                     fontSize: '12px',
                     marginTop: '6px',
                     color: 'var(--color-on-surface-variant)',
+                    fontVariantNumeric: 'tabular-nums',
                   }}
                 >
                   <span>
-                    Gastado: <strong>{formatCOP(activeBudgetStatus.totalSpent)}</strong> de{' '}
-                    {formatCOP(activeBudgetStatus.totalBudgeted)}
+                    Por pagar:{' '}
+                    <strong style={{ color: 'var(--color-error)' }}>
+                      {formatCOP(totalDebtRemaining)}
+                    </strong>
                   </span>
-                  <span style={{ fontWeight: 700 }}>{activeBudgetStatus.totalPercentage}%</span>
+                  <span>
+                    Abonado:{' '}
+                    <strong style={{ color: 'var(--color-success)' }}>
+                      {formatCOP(totalDebtPaid)}
+                    </strong>{' '}
+                    ({debtPaidPct}%)
+                  </span>
                 </div>
-                {activeBudgetStatus.totalExceededBy > 0 && (
-                  <div
-                    style={{
-                      marginTop: '4px',
-                      fontSize: '11px',
-                      color: 'var(--color-error)',
-                      fontWeight: 600,
-                    }}
-                  >
-                    Excedido por {formatCOP(activeBudgetStatus.totalExceededBy)}
-                  </div>
-                )}
               </div>
             ) : (
               <p
                 className="text-body-sm"
                 style={{ color: 'var(--color-on-surface-variant)', marginTop: '6px' }}
               >
-                Toca aquí para configurar tu presupuesto mensual o quincenal.
+                Toca aquí para registrar las deudas de tus tarjetas de crédito y llevar el control de tus abonos.
               </p>
             )}
           </Card>

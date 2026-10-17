@@ -16,11 +16,14 @@ import {
   query,
   where,
   or,
+  increment,
+  arrayUnion,
 } from 'firebase/firestore';
 import { formatCOP, formatInputCOP, parseCOP } from '@/lib/currency';
 import {
   AttachmentMeta,
   BudgetDoc,
+  DebtChargeLog,
   EnhancedTransaction,
   IncomeFrequency,
   Scope,
@@ -360,6 +363,71 @@ export function QuickMovementModal({
 
       if (chosenPm) {
         setLastUsedPaymentMethodId(chosenPm.id);
+      }
+
+      // Automatically reflect Credit Card expenses in Credit Card Debts (debts collection)
+      if (
+        !editingTransaction &&
+        txType === 'expense' &&
+        chosenPm &&
+        chosenPm.type === 'credito' &&
+        category !== 'Pago Deuda / Tarjeta' &&
+        !category.startsWith('Abono a Deuda')
+      ) {
+        try {
+          const debtsRef = collection(db, 'debts');
+          const qDebts = query(debtsRef, where('paymentMethodId', '==', chosenPm.id));
+          const debtSnap = await getDocs(qDebts);
+
+          const chargeEntry: DebtChargeLog = {
+            id: `ch_${Date.now()}`,
+            amount: numericAmount,
+            note: note.trim() || place.trim() || category,
+            category,
+            place: place.trim() || category,
+            spentByUserId: payerUid,
+            spentByName: payerName,
+            transactionId: savedDocId,
+            spentAt: dateObj.toISOString(),
+          };
+
+          const cardTitle = `${chosenPm.alias}${chosenPm.bank ? ` · ${chosenPm.bank}` : ''}${
+            chosenPm.last4 ? ` (*${chosenPm.last4})` : ''
+          }`;
+
+          if (!debtSnap.empty) {
+            const targetDebtDoc = debtSnap.docs[0];
+            await updateDoc(doc(db, 'debts', targetDebtDoc.id), {
+              targetAmount: increment(numericAmount),
+              charges: arrayUnion(chargeEntry),
+              updatedAt: Timestamp.now(),
+            });
+          } else {
+            await addDoc(debtsRef, {
+              householdId: household?.id || 'default',
+              title: cardTitle,
+              targetAmount: numericAmount,
+              currentAmount: 0,
+              ownerId: chosenPm.holderUserId || user.uid,
+              ownerName: chosenPm.holderName || payerName,
+              scope,
+              sharedWith: partnerUid ? [partnerUid] : [],
+              paymentMethodId: chosenPm.id,
+              paymentMethodAlias: chosenPm.alias,
+              bank: chosenPm.bank || '',
+              last4: chosenPm.last4 || '',
+              cutDay: chosenPm.cutDay || null,
+              dueDay: chosenPm.dueDay || null,
+              linkedRecurringPaymentId: null,
+              abonos: [],
+              charges: [chargeEntry],
+              createdAt: Timestamp.fromDate(dateObj),
+              updatedAt: Timestamp.now(),
+            });
+          }
+        } catch (cardErr) {
+          console.warn('Error syncing credit card expense to debts:', cardErr);
+        }
       }
 
       // Evaluate Budget Alerts (RF-08) whenever an expense is created or edited

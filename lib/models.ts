@@ -122,11 +122,60 @@ export interface EnhancedTransaction {
   sharedWith: string[];
   recurringPaymentId?: string | null;
   recurringPaymentTitle?: string | null;
+  debtId?: string | null;
+  debtTitle?: string | null;
   deletedAt?: any | null;
   createdAt: any;
   spentAt?: any;
   updatedAt?: any;
   updatedBy?: string;
+}
+
+export interface DebtAbonoLog {
+  id: string;
+  amount: number;
+  note?: string;
+  paidByUserId: string;
+  paidByName: string;
+  paymentMethodId?: string | null;
+  paymentMethodAlias?: string | null;
+  transactionId?: string | null;
+  paidAt: string;
+}
+
+export interface DebtChargeLog {
+  id: string;
+  amount: number;
+  note?: string;
+  category?: string;
+  place?: string;
+  spentByUserId: string;
+  spentByName: string;
+  transactionId?: string | null;
+  spentAt: string;
+}
+
+export interface DebtDoc {
+  id: string;
+  householdId?: string;
+  title: string;
+  targetAmount: number;
+  currentAmount: number;
+  ownerId: string;
+  ownerName?: string;
+  scope?: Scope;
+  sharedWith?: string[];
+  paymentMethodId?: string | null;
+  paymentMethodAlias?: string | null;
+  bank?: string;
+  last4?: string;
+  cutDay?: number | null;
+  dueDay?: number | null;
+  linkedRecurringPaymentId?: string | null;
+  abonos?: DebtAbonoLog[];
+  charges?: DebtChargeLog[];
+  createdAt?: any;
+  updatedAt?: any;
 }
 
 export interface BudgetLine {

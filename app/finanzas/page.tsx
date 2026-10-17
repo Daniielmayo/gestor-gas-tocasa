@@ -535,9 +535,26 @@ export default function Finanzas() {
   const overallSavingsProgress =
     totalSavingsTarget > 0 ? Math.min(100, Math.round((totalSavingsCurrent / totalSavingsTarget) * 100)) : 0;
 
-  const totalDebtTarget = debts.reduce((sum, d) => sum + d.targetAmount, 0);
-  const totalDebtPaid = debts.reduce((sum, d) => sum + d.currentAmount, 0);
+  const scopedDebts = debts.filter((d: any) => {
+    const dScope = d.scope || (d.sharedWith && d.sharedWith.length > 0 ? 'conjunto' : 'personal');
+    if (globalScope === 'mio') return d.ownerId === user.uid;
+    if (globalScope === 'pareja' && partnerUid) return d.ownerId === partnerUid;
+    if (globalScope === 'conjunto') return dScope === 'conjunto';
+    return true;
+  });
+  const totalDebtTarget = scopedDebts.reduce((sum, d) => sum + Number(d.targetAmount || 0), 0);
+  const totalDebtPaid = scopedDebts.reduce((sum, d) => sum + Number(d.currentAmount || 0), 0);
   const totalDebtRemaining = Math.max(0, totalDebtTarget - totalDebtPaid);
+
+  const periodDebtAbonos = periodTransactions
+    .filter(
+      (t) =>
+        t.type === 'expense' &&
+        (Boolean(t.debtId) ||
+          t.category === 'Pago Deuda / Tarjeta' ||
+          (t.category && t.category.startsWith('Abono a Deuda')))
+    )
+    .reduce((sum, t) => sum + Number(t.amount || 0), 0);
 
   return (
     <main className={`container ${styles.main}`} style={{ paddingBottom: '100px' }}>
@@ -711,7 +728,7 @@ export default function Finanzas() {
       <section>
         <div className={styles.balanceCard} style={{ padding: '18px' }}>
           <span className={styles.balanceTitle}>
-            Disponible del Periodo ({globalScope.toUpperCase()})
+            Balance General del Periodo ({globalScope.toUpperCase()})
           </span>
           <h2
             className={`${styles.balanceAmount} ${
@@ -723,8 +740,8 @@ export default function Finanzas() {
           <div
             style={{
               display: 'grid',
-              gridTemplateColumns: '1fr 1fr',
-              gap: '12px',
+              gridTemplateColumns: 'repeat(3, 1fr)',
+              gap: '10px',
               marginTop: '12px',
               paddingTop: '12px',
               borderTop: '1px solid var(--color-outline-variant)',
@@ -734,18 +751,33 @@ export default function Finanzas() {
               <span className="text-label-sm" style={{ color: 'var(--color-on-surface-variant)' }}>
                 Ingresos (+)
               </span>
-              <div style={{ fontWeight: 700, color: 'var(--color-success)', fontSize: '15px' }}>
+              <div style={{ fontWeight: 700, color: 'var(--color-success)', fontSize: '14px', fontVariantNumeric: 'tabular-nums' }}>
                 {formatCOP(totalIncome)}
               </div>
             </div>
             <div>
               <span className="text-label-sm" style={{ color: 'var(--color-on-surface-variant)' }}>
-                Gastos (-)
+                Gastos y Abonos (-)
               </span>
-              <div style={{ fontWeight: 700, color: 'var(--color-error)', fontSize: '15px' }}>
+              <div style={{ fontWeight: 700, color: 'var(--color-error)', fontSize: '14px', fontVariantNumeric: 'tabular-nums' }}>
                 {formatCOP(totalExpense)}
               </div>
             </div>
+            <Link href="/finanzas/deudas" style={{ textDecoration: 'none' }}>
+              <div>
+                <span className="text-label-sm" style={{ color: 'var(--color-on-surface-variant)' }}>
+                  Deuda Tarjetas →
+                </span>
+                <div style={{ fontWeight: 700, color: 'var(--color-primary)', fontSize: '14px', fontVariantNumeric: 'tabular-nums' }}>
+                  {formatCOP(totalDebtRemaining)}
+                </div>
+                {periodDebtAbonos > 0 && (
+                  <div style={{ fontSize: '10px', color: 'var(--color-success)', fontWeight: 600 }}>
+                    Abonado: {formatCOP(periodDebtAbonos)}
+                  </div>
+                )}
+              </div>
+            </Link>
           </div>
         </div>
       </section>
@@ -1096,11 +1128,14 @@ export default function Finanzas() {
             <Link href="/finanzas/deudas" style={{ textDecoration: 'none' }}>
               <Card style={{ padding: '14px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
-                  <Target size={18} color="var(--color-error)" />
-                  <span style={{ fontWeight: 600, fontSize: '13px' }}>Deudas Externas</span>
+                  <CreditCard size={18} color="var(--color-error)" />
+                  <span style={{ fontWeight: 600, fontSize: '13px' }}>Deudas Tarjetas</span>
                 </div>
-                <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--color-error)' }}>
+                <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--color-error)', fontVariantNumeric: 'tabular-nums' }}>
                   {formatCOP(totalDebtRemaining)}
+                </div>
+                <div style={{ fontSize: '11px', color: 'var(--color-on-surface-variant)', marginTop: '2px' }}>
+                  Abonado: {formatCOP(totalDebtPaid)}
                 </div>
               </Card>
             </Link>
