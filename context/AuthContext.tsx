@@ -3,13 +3,15 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 import { User, onAuthStateChanged, signOut } from 'firebase/auth';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { auth, db } from '@/lib/firebase';
+import { ThemeColor } from '@/lib/models';
 
-interface UserProfile {
+export interface UserProfile {
   uid: string;
   displayName: string | null;
   email: string | null;
   initials: string | null;
   photoURL: string | null;
+  themeColor?: ThemeColor;
 }
 
 interface AuthContextType {
@@ -53,6 +55,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               email: firebaseUser.email,
               initials: firebaseUser.displayName ? firebaseUser.displayName.substring(0, 2).toUpperCase() : 'US',
               photoURL: firebaseUser.photoURL,
+              themeColor: 'azul',
             };
             await setDoc(userDocRef, newProfile);
             setProfile(newProfile);

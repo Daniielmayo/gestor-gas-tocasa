@@ -150,46 +150,50 @@ export function HouseholdProvider({ children }: { children: React.ReactNode }) {
     root.style.setProperty('--shadow-level-2', pal.shadow);
   };
 
+  // Load user theme preference (per-user) from localStorage and user profile
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const savedScope = localStorage.getItem('gastos_global_scope_v2') as GlobalScopeFilter | null;
-      if (savedScope && ['mio', 'conjunto', 'pareja', 'todo'].includes(savedScope)) {
-        setGlobalScopeState(savedScope);
-      } else {
-        setGlobalScopeState('todo');
-      }
-      const savedTheme = localStorage.getItem('gastos_theme_color') as ThemeColor | null;
-      if (savedTheme && ['azul', 'morado', 'verde', 'amarillo'].includes(savedTheme)) {
-        setThemeColorState(savedTheme);
-        applyThemePaletteToDOM(savedTheme);
-      }
-      const savedPm = localStorage.getItem('gastos_last_pm');
-      if (savedPm) setLastUsedPaymentMethodIdState(savedPm);
-    }
-  }, []);
+    if (typeof window === 'undefined') return;
 
-  useEffect(() => {
-    if (household?.themeColor && ['azul', 'morado', 'verde', 'amarillo'].includes(household.themeColor)) {
-      const savedLocal =
-        typeof window !== 'undefined'
-          ? (localStorage.getItem('gastos_theme_color') as ThemeColor | null)
-          : null;
-      if (!savedLocal) {
-        setThemeColorState(household.themeColor);
-        applyThemePaletteToDOM(household.themeColor);
+    if (user?.uid) {
+      const userThemeKey = `gastos_theme_color_${user.uid}`;
+      const savedUserTheme = (localStorage.getItem(userThemeKey) || localStorage.getItem('gastos_theme_color')) as ThemeColor | null;
+
+      if (savedUserTheme && ['azul', 'morado', 'verde', 'amarillo'].includes(savedUserTheme)) {
+        setThemeColorState(savedUserTheme);
+        applyThemePaletteToDOM(savedUserTheme);
+      } else if (profile?.themeColor && ['azul', 'morado', 'verde', 'amarillo'].includes(profile.themeColor)) {
+        setThemeColorState(profile.themeColor);
+        applyThemePaletteToDOM(profile.themeColor);
+      } else {
+        setThemeColorState('azul');
+        applyThemePaletteToDOM('azul');
       }
     }
-  }, [household?.themeColor]);
+
+    const savedScope = localStorage.getItem('gastos_global_scope_v2') as GlobalScopeFilter | null;
+    if (savedScope && ['mio', 'conjunto', 'pareja', 'todo'].includes(savedScope)) {
+      setGlobalScopeState(savedScope);
+    } else {
+      setGlobalScopeState('todo');
+    }
+    const savedPm = localStorage.getItem('gastos_last_pm');
+    if (savedPm) setLastUsedPaymentMethodIdState(savedPm);
+  }, [user?.uid, profile?.themeColor]);
 
   const setThemeColor = async (color: ThemeColor) => {
     setThemeColorState(color);
     applyThemePaletteToDOM(color);
+
     if (typeof window !== 'undefined') {
+      if (user?.uid) {
+        localStorage.setItem(`gastos_theme_color_${user.uid}`, color);
+      }
       localStorage.setItem('gastos_theme_color', color);
     }
-    if (household?.id) {
+
+    if (user?.uid) {
       try {
-        await updateDoc(doc(db, 'households', household.id), {
+        await updateDoc(doc(db, 'users', user.uid), {
           themeColor: color,
           updatedAt: serverTimestamp(),
         });
