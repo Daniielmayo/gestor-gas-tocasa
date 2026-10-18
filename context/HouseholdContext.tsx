@@ -94,6 +94,7 @@ interface HouseholdContextType {
   linkPartnerByEmailOrCode: (emailOrCode: string) => Promise<{ ok: boolean; message: string }>;
   updateHouseholdConfig: (partial: Partial<Household>) => Promise<void>;
   resetAllHouseholdDataExceptUsers: () => Promise<{ ok: boolean; deletedCount: number; message: string }>;
+  resetUserData: (targetUid: string) => Promise<{ ok: boolean; deletedCount: number; message: string }>;
   loadingHousehold: boolean;
 }
 
@@ -116,6 +117,7 @@ const HouseholdContext = createContext<HouseholdContextType>({
   linkPartnerByEmailOrCode: async () => ({ ok: false, message: '' }),
   updateHouseholdConfig: async () => {},
   resetAllHouseholdDataExceptUsers: async () => ({ ok: false, deletedCount: 0, message: '' }),
+  resetUserData: async () => ({ ok: false, deletedCount: 0, message: '' }),
   loadingHousehold: true,
 });
 
@@ -808,6 +810,85 @@ export function HouseholdProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const resetUserData = async (
+    targetUid: string
+  ): Promise<{
+    ok: boolean;
+    deletedCount: number;
+    message: string;
+  }> => {
+    if (!user || !targetUid) {
+      return { ok: false, deletedCount: 0, message: 'Identificador de usuario no válido.' };
+    }
+
+    // Collections where documents belong to or are authored by the specific user.
+    // Checks fields: 'ownerId', 'userId', 'createdBy', 'paidByUserId', 'holderUserId'.
+    const collectionsToCheck = [
+      'transactions',
+      'debts',
+      'recurringPayments',
+      'savings',
+      'budgets',
+      'settlements',
+      'periodWorksheets',
+      'paymentMethods',
+      'financeCategories',
+      'tags',
+      'places',
+      'incomeSources',
+      'lists',
+      'listItems',
+      'notifications',
+      'history',
+    ];
+
+    let deletedCount = 0;
+
+    try {
+      for (const colName of collectionsToCheck) {
+        try {
+          const snap = await getDocs(collection(db, colName));
+          const docsToDelete = snap.docs.filter((dSnap) => {
+            const data = dSnap.data();
+            return (
+              data.ownerId === targetUid ||
+              data.userId === targetUid ||
+              data.createdBy === targetUid ||
+              data.paidByUserId === targetUid ||
+              data.holderUserId === targetUid
+            );
+          });
+
+          const deletePromises = docsToDelete.map(async (dSnap) => {
+            try {
+              await deleteDoc(doc(db, colName, dSnap.id));
+              deletedCount += 1;
+            } catch (err) {
+              // Ignore single doc failure
+            }
+          });
+
+          await Promise.all(deletePromises);
+        } catch (err) {
+          console.warn(`Error limpiando datos de usuario en colección ${colName}:`, err);
+        }
+      }
+
+      return {
+        ok: true,
+        deletedCount,
+        message: `Se eliminaron ${deletedCount} registros creados por el usuario seleccionado. Su perfil y el vínculo del hogar siguen intactos.`,
+      };
+    } catch (e: any) {
+      console.error('Error al reiniciar datos de usuario:', e);
+      return {
+        ok: false,
+        deletedCount,
+        message: 'Ocurrió un error al limpiar los datos del usuario.',
+      };
+    }
+  };
+
   return (
     <HouseholdContext.Provider
       value={{
@@ -829,6 +910,7 @@ export function HouseholdProvider({ children }: { children: React.ReactNode }) {
         linkPartnerByEmailOrCode,
         updateHouseholdConfig,
         resetAllHouseholdDataExceptUsers,
+        resetUserData,
         loadingHousehold,
       }}
     >

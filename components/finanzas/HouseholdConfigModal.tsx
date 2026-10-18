@@ -70,6 +70,7 @@ export function HouseholdConfigModal({
     setThemeColor,
     linkPartnerByEmailOrCode,
     updateHouseholdConfig,
+    resetUserData,
   } = useHousehold();
 
   const [activeTab, setActiveTab] = useState<ConfigTabId>(initialTab);
@@ -142,6 +143,29 @@ export function HouseholdConfigModal({
     const res = await linkPartnerByEmailOrCode(inviteInput);
     setLinkStatus({ ok: res.ok, msg: res.message });
     if (res.ok) setInviteInput('');
+  };
+
+  const [isResettingPartner, setIsResettingPartner] = useState(false);
+  const [resetPartnerStatus, setResetPartnerStatus] = useState<{ ok: boolean; msg: string } | null>(null);
+
+  const handleResetPartnerData = async () => {
+    if (!partnerUid) return;
+    const partnerName = partner?.displayName || 'tu pareja';
+    const confirmed = window.confirm(
+      `¿Estás seguro de que deseas borrar TODOS los datos creados por ${partnerName}?\n\nEsto eliminará sus transacciones, deudas, tarjetas, ahorros y listas, pero MANTENDRÁ intacto su usuario y su vínculo contigo en el hogar.`
+    );
+    if (!confirmed) return;
+
+    setIsResettingPartner(true);
+    setResetPartnerStatus(null);
+    try {
+      const res = await resetUserData(partnerUid);
+      setResetPartnerStatus({ ok: res.ok, msg: res.message });
+    } catch (err: any) {
+      setResetPartnerStatus({ ok: false, msg: err?.message || 'Error al eliminar datos.' });
+    } finally {
+      setIsResettingPartner(false);
+    }
   };
 
   // --- Handlers: Payment Methods (Create, Edit, Toggle, Delete) ---
@@ -1669,6 +1693,57 @@ export function HouseholdConfigModal({
                   <option value="totals_only">Ver solo totales personales</option>
                 </select>
               </div>
+
+              {partnerUid && (
+                <div
+                  style={{
+                    marginTop: '8px',
+                    padding: '12px',
+                    borderRadius: '12px',
+                    backgroundColor: 'rgba(239, 68, 68, 0.06)',
+                    border: '1px solid rgba(239, 68, 68, 0.25)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '8px',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <Trash2 size={16} color="#DC2626" />
+                    <span style={{ fontSize: '13px', fontWeight: 600, color: '#DC2626' }}>
+                      Zona de limpieza: {partner?.displayName || 'Pareja'}
+                    </span>
+                  </div>
+                  <p style={{ fontSize: '12px', color: 'var(--color-on-surface-variant)', margin: 0 }}>
+                    Elimina únicamente los datos creados por{' '}
+                    <strong>{partner?.displayName || 'tu pareja'}</strong> (gastos, tarjetas, deudas, ahorros y listas).
+                    Su cuenta de usuario y el vínculo con el hogar permanecen intactos.
+                  </p>
+                  {resetPartnerStatus && (
+                    <p
+                      style={{
+                        fontSize: '12px',
+                        fontWeight: 600,
+                        color: resetPartnerStatus.ok ? '#059669' : '#DC2626',
+                        margin: 0,
+                      }}
+                    >
+                      {resetPartnerStatus.msg}
+                    </p>
+                  )}
+                  <Button
+                    type="button"
+                    variant="danger"
+                    size="sm"
+                    disabled={isResettingPartner}
+                    onClick={handleResetPartnerData}
+                    style={{ alignSelf: 'flex-start', marginTop: '4px' }}
+                  >
+                    {isResettingPartner
+                      ? 'Eliminando datos...'
+                      : `Borrar todos los datos de ${partner?.displayName || 'tu pareja'}`}
+                  </Button>
+                </div>
+              )}
             </div>
           </div>
         )}

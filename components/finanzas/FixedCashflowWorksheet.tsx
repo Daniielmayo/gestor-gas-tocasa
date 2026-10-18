@@ -31,6 +31,9 @@ import {
   TrendingUp,
   TrendingDown,
   Pencil,
+  ChevronDown,
+  ChevronUp,
+  Calendar,
 } from 'lucide-react';
 
 interface FixedCashflowWorksheetProps {
@@ -59,6 +62,10 @@ export function FixedCashflowWorksheet({
   const [newAmount, setNewAmount] = useState('');
   const [isDiscountRow, setIsDiscountRow] = useState(false);
   const [isSavingModal, setIsSavingModal] = useState(false);
+
+  // Collapsible accordion states for Quincena 1 and Quincena 2
+  const [openQ1, setOpenQ1] = useState(true);
+  const [openQ2, setOpenQ2] = useState(true);
 
   const yearMonthPrefix = useMemo(() => {
     const y = currentDate.getFullYear();
@@ -668,7 +675,7 @@ export function FixedCashflowWorksheet({
       </Card>
 
       {/* ================================================================= */}
-      {/* CARD 2: LISTA LIMPIA DE OBLIGACIONES FIJAS                        */}
+      {/* CARD 2: LISTA LIMPIA DE OBLIGACIONES FIJAS (DIFERENCIADA POR QNA) */}
       {/* ================================================================= */}
       <Card style={{ padding: '12px 14px' }}>
         <div
@@ -676,12 +683,15 @@ export function FixedCashflowWorksheet({
             display: 'flex',
             justifyContent: 'space-between',
             alignItems: 'center',
-            marginBottom: '8px',
+            marginBottom: '10px',
           }}
         >
-          <h3 style={{ fontSize: '14px', fontWeight: 600, margin: 0 }}>
-            Obligaciones Fijas ({activeMetrics.obligations.length})
-          </h3>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Calendar size={16} color="var(--color-primary)" />
+            <h3 style={{ fontSize: '14px', fontWeight: 600, margin: 0 }}>
+              Obligaciones Fijas ({activeMetrics.obligations.length})
+            </h3>
+          </div>
 
           <Button variant="primary" size="sm" onClick={() => openAddPopup('expense')}>
             <Plus size={14} style={{ marginRight: '2px' }} /> Gasto Fijo
@@ -708,10 +718,35 @@ export function FixedCashflowWorksheet({
             </p>
           </div>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column' }}>
-            {activeMetrics.obligations.map((ob, index) => {
+          (() => {
+            const q1List = activeMetrics.obligations.filter(
+              (o) => o.sourcePeriodKey.endsWith('-Q1') || o.quincenaTag.includes('1ª')
+            );
+            const q2List = activeMetrics.obligations.filter(
+              (o) => o.sourcePeriodKey.endsWith('-Q2') || o.quincenaTag.includes('2ª')
+            );
+            const otherList = activeMetrics.obligations.filter(
+              (o) =>
+                !o.sourcePeriodKey.endsWith('-Q1') &&
+                !o.sourcePeriodKey.endsWith('-Q2') &&
+                !o.quincenaTag.includes('1ª') &&
+                !o.quincenaTag.includes('2ª')
+            );
+
+            const q1Total = q1List.reduce((sum, o) => sum + Number(o.amount || 0), 0);
+            const q2Total = q2List.reduce((sum, o) => sum + Number(o.amount || 0), 0);
+            const otherTotal = otherList.reduce((sum, o) => sum + Number(o.amount || 0), 0);
+
+            const renderObligationRow = (
+              ob: WorksheetObligationItem & {
+                sourcePeriodKey: string;
+                quincenaTag: string;
+                ownerUid: string;
+                ownerLabel: string;
+              },
+              isLastItem: boolean
+            ) => {
               const isNegative = ob.amount < 0;
-              const isLast = index === activeMetrics.obligations.length - 1;
               return (
                 <div
                   key={`${ob.ownerUid}_${ob.sourcePeriodKey}_${ob.id}`}
@@ -720,8 +755,8 @@ export function FixedCashflowWorksheet({
                     alignItems: 'center',
                     justifyContent: 'space-between',
                     gap: '10px',
-                    padding: '8px 2px',
-                    borderBottom: isLast ? 'none' : '1px solid var(--color-surface-container)',
+                    padding: '8px 4px',
+                    borderBottom: isLastItem ? 'none' : '1px solid var(--color-surface-container)',
                   }}
                 >
                   <div
@@ -767,9 +802,8 @@ export function FixedCashflowWorksheet({
                           marginTop: '1px',
                         }}
                       >
-                        {ob.quincenaTag}
-                        {isConsolidatedView ? ` • ${ob.ownerLabel}` : ''}
-                        {isNegative ? ' • Ahorro a favor' : ''}
+                        {isConsolidatedView ? `${ob.ownerLabel} • ` : ''}
+                        {isNegative ? 'Ahorro a favor' : ob.paid ? 'Pagado' : 'Pendiente'}
                       </div>
                     </div>
                   </div>
@@ -812,8 +846,208 @@ export function FixedCashflowWorksheet({
                   </div>
                 </div>
               );
-            })}
-          </div>
+            };
+
+            return (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                {/* GRUPO 1: QUINCENA 1 (Día 15) */}
+                {(quincenaFilter === 'all' || quincenaFilter === 'q1') && (
+                  <div
+                    style={{
+                      borderRadius: '12px',
+                      border: '1px solid var(--color-outline-variant)',
+                      backgroundColor: 'var(--color-surface-container-lowest)',
+                      overflow: 'hidden',
+                    }}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setOpenQ1(!openQ1)}
+                      style={{
+                        width: '100%',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        padding: '10px 12px',
+                        backgroundColor: 'var(--color-surface-container-low)',
+                        border: 'none',
+                        cursor: 'pointer',
+                        textAlign: 'left',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span
+                          style={{
+                            display: 'inline-block',
+                            padding: '2px 8px',
+                            borderRadius: '6px',
+                            fontSize: '11px',
+                            fontWeight: 700,
+                            backgroundColor: 'var(--color-primary-container)',
+                            color: 'var(--color-primary-dark)',
+                          }}
+                        >
+                          1ª Quincena (15)
+                        </span>
+                        <span style={{ fontSize: '12px', color: 'var(--color-on-surface-variant)' }}>
+                          {q1List.length} {q1List.length === 1 ? 'gasto' : 'gastos'}
+                        </span>
+                      </div>
+
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span
+                          style={{
+                            fontSize: '13px',
+                            fontWeight: 700,
+                            fontVariantNumeric: 'tabular-nums',
+                            color: 'var(--color-error)',
+                          }}
+                        >
+                          {formatCOP(q1Total)}
+                        </span>
+                        {openQ1 ? (
+                          <ChevronUp size={16} color="var(--color-on-surface-variant)" />
+                        ) : (
+                          <ChevronDown size={16} color="var(--color-on-surface-variant)" />
+                        )}
+                      </div>
+                    </button>
+
+                    {openQ1 && (
+                      <div style={{ padding: '4px 10px' }}>
+                        {q1List.length === 0 ? (
+                          <div
+                            style={{
+                              padding: '10px',
+                              textAlign: 'center',
+                              fontSize: '12px',
+                              color: 'var(--color-on-surface-variant)',
+                            }}
+                          >
+                            Sin gastos para la 1ª Quincena
+                          </div>
+                        ) : (
+                          q1List.map((ob, idx) => renderObligationRow(ob, idx === q1List.length - 1))
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* GRUPO 2: QUINCENA 2 (Día 30) */}
+                {(quincenaFilter === 'all' || quincenaFilter === 'q2') && (
+                  <div
+                    style={{
+                      borderRadius: '12px',
+                      border: '1px solid var(--color-outline-variant)',
+                      backgroundColor: 'var(--color-surface-container-lowest)',
+                      overflow: 'hidden',
+                    }}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setOpenQ2(!openQ2)}
+                      style={{
+                        width: '100%',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        padding: '10px 12px',
+                        backgroundColor: 'var(--color-surface-container-low)',
+                        border: 'none',
+                        cursor: 'pointer',
+                        textAlign: 'left',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span
+                          style={{
+                            display: 'inline-block',
+                            padding: '2px 8px',
+                            borderRadius: '6px',
+                            fontSize: '11px',
+                            fontWeight: 700,
+                            backgroundColor: 'rgba(139, 92, 246, 0.15)',
+                            color: '#6D28D9',
+                          }}
+                        >
+                          2ª Quincena (30)
+                        </span>
+                        <span style={{ fontSize: '12px', color: 'var(--color-on-surface-variant)' }}>
+                          {q2List.length} {q2List.length === 1 ? 'gasto' : 'gastos'}
+                        </span>
+                      </div>
+
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span
+                          style={{
+                            fontSize: '13px',
+                            fontWeight: 700,
+                            fontVariantNumeric: 'tabular-nums',
+                            color: 'var(--color-error)',
+                          }}
+                        >
+                          {formatCOP(q2Total)}
+                        </span>
+                        {openQ2 ? (
+                          <ChevronUp size={16} color="var(--color-on-surface-variant)" />
+                        ) : (
+                          <ChevronDown size={16} color="var(--color-on-surface-variant)" />
+                        )}
+                      </div>
+                    </button>
+
+                    {openQ2 && (
+                      <div style={{ padding: '4px 10px' }}>
+                        {q2List.length === 0 ? (
+                          <div
+                            style={{
+                              padding: '10px',
+                              textAlign: 'center',
+                              fontSize: '12px',
+                              color: 'var(--color-on-surface-variant)',
+                            }}
+                          >
+                            Sin gastos para la 2ª Quincena
+                          </div>
+                        ) : (
+                          q2List.map((ob, idx) => renderObligationRow(ob, idx === q2List.length - 1))
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* OTROS GASTOS MENSUALES O GENERALES (SI LOS HAY) */}
+                {quincenaFilter === 'all' && otherList.length > 0 && (
+                  <div
+                    style={{
+                      borderRadius: '12px',
+                      border: '1px solid var(--color-outline-variant)',
+                      backgroundColor: 'var(--color-surface-container-lowest)',
+                      padding: '8px 10px',
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontSize: '11px',
+                        fontWeight: 700,
+                        color: 'var(--color-on-surface-variant)',
+                        textTransform: 'uppercase',
+                        marginBottom: '6px',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                      }}
+                    >
+                      <span>Mensual General</span>
+                      <span style={{ color: 'var(--color-error)' }}>{formatCOP(otherTotal)}</span>
+                    </div>
+                    {otherList.map((ob, idx) => renderObligationRow(ob, idx === otherList.length - 1))}
+                  </div>
+                )}
+              </div>
+            );
+          })()
         )}
       </Card>
 
