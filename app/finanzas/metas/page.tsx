@@ -253,6 +253,7 @@ export default function MetasAhorro() {
       // Aporte descontando del saldo general (expense) o Retiro reintegrando al saldo general (income)
       await addDoc(collection(db, 'transactions'), {
         type: isAdd ? 'expense' : 'income',
+        incomeType: isAdd ? undefined : 'variable',
         amount: amt,
         category: 'Ahorro / Meta',
         place: `Bolsillo: ${selectedSaving.title}`,
@@ -283,9 +284,39 @@ export default function MetasAhorro() {
   };
 
   const handleDeleteSaving = async () => {
-    if (!savingToDelete) return;
+    if (!savingToDelete || !user) return;
     setIsSubmitting(true);
     try {
+      const remainingFunds = Number(savingToDelete.currentAmount || 0);
+
+      // If the goal being deleted still has accumulated funds, refund them to the general balance
+      if (remainingFunds > 0) {
+        const goalScope: Scope =
+          savingToDelete.scope ||
+          (savingToDelete.sharedWith && savingToDelete.sharedWith.length > 0 ? 'conjunto' : 'personal');
+        const sharedArray = partnerUid ? [partnerUid] : [];
+
+        await addDoc(collection(db, 'transactions'), {
+          type: 'income',
+          amount: remainingFunds,
+          category: 'Ahorro / Meta',
+          place: `Bolsillo: ${savingToDelete.title}`,
+          description: `Reintegro por eliminación de meta/bolsillo: ${savingToDelete.title}`,
+          title: `Reintegro: ${savingToDelete.title}`,
+          scope: goalScope,
+          incomeType: 'variable',
+          paidByUserId: user.uid,
+          paidByName: profile?.displayName?.split(' ')[0] || 'Yo',
+          householdId: household?.id || savingToDelete.householdId || '',
+          tags: ['ahorro', 'bolsillo', 'reintegro'],
+          ownerId: user.uid,
+          ownerName: profile?.displayName?.split(' ')[0] || 'Usuario',
+          sharedWith: sharedArray,
+          deletedAt: null,
+          createdAt: Timestamp.now(),
+        });
+      }
+
       await deleteDoc(doc(db, 'savings', savingToDelete.id));
       setIsDeleteSavingModalOpen(false);
       setSavingToDelete(null);

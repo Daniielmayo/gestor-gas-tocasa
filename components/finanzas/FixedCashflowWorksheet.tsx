@@ -250,7 +250,7 @@ export function FixedCashflowWorksheet({
     );
 
     const variableIncome = userTxs
-      .filter((t) => t.type === 'income' && t.incomeType === 'variable')
+      .filter((t) => t.type === 'income' && t.incomeType !== 'fijo')
       .reduce((sum, t) => sum + Number(t.amount || 0), 0);
 
     const extraExpenses = userTxs
