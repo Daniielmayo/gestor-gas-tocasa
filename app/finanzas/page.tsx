@@ -403,7 +403,7 @@ export default function Finanzas() {
   const totalDebtRemaining = Math.max(0, totalDebtTarget - totalDebtPaid);
 
   return (
-    <main className={`container ${styles.main}`} style={{ paddingBottom: '90px' }}>
+    <main className={`container ${styles.main}`}>
       {/* TOP HEADER */}
       <header className={styles.header}>
         <Link href="/">

@@ -38,6 +38,11 @@
   --container-margin: 16px;
   --gutter: 12px;
 
+  /* Fixed bottom chrome clearance (nav ends at 88px, FAB/SpeedDial at 160px) */
+  --bottom-nav-clearance: 112px; /* 88px nav + 24px breathing room */
+  --bottom-fab-clearance: 184px; /* 160px floating action + 24px breathing room */
+  --bottom-composer-clearance: 208px; /* fixed composer above nav + breathing room */
+
   /* Radii */
   --radius-sm: 4px;
   --radius-md: 12px;
@@ -47,6 +52,14 @@
   /* Elevations */
   --shadow-level-1: 0px 2px 8px rgba(31, 41, 55, 0.05);
   --shadow-level-2: 0px 8px 20px rgba(59, 130, 246, 0.2);
+}
+
+@supports (padding-bottom: env(safe-area-inset-bottom)) {
+  :root {
+    --bottom-nav-clearance: calc(112px + env(safe-area-inset-bottom));
+    --bottom-fab-clearance: calc(184px + env(safe-area-inset-bottom));
+    --bottom-composer-clearance: calc(208px + env(safe-area-inset-bottom));
+  }
 }
 
 * {

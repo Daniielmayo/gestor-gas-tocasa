@@ -454,7 +454,7 @@ export default function Deudas() {
     totalDebtTarget > 0 ? Math.min(100, Math.round((totalDebtPaid / totalDebtTarget) * 100)) : 0;
 
   return (
-    <main className={`container ${styles.main}`} style={{ paddingBottom: '100px' }}>
+    <main className={`container ${styles.main}`}>
       <header className={styles.header}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', width: '100%' }}>
           {/* Fila superior: navegación y acciones principales */}

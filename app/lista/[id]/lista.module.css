@@ -1,6 +1,6 @@
 .main {
   padding-top: var(--spacing-md);
-  padding-bottom: 220px; /* Ensure space for bottom input and bottom nav even on large lists */
+  padding-bottom: var(--bottom-composer-clearance);
   display: flex;
   flex-direction: column;
   gap: var(--spacing-lg);
@@ -110,6 +110,7 @@
 
 @supports (padding-bottom: env(safe-area-inset-bottom)) {
   .bottomInputContainer {
+    bottom: calc(104px + env(safe-area-inset-bottom));
     padding-bottom: calc(var(--spacing-md) + env(safe-area-inset-bottom));
   }
 }

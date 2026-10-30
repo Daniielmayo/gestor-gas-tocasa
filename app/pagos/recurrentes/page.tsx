@@ -298,7 +298,7 @@ export default function PagosRecurrentes() {
   }
 
   return (
-    <main className={`container ${styles.main}`} style={{ paddingBottom: '90px' }}>
+    <main className={`container ${styles.main}`}>
       {/* Cabecera Limpia */}
       <header className={styles.appBar}>
         <div
