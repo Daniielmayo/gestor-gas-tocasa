@@ -40,6 +40,9 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
+# agent tooling artifacts (regenerated locally, machine-specific paths)
+/.atl/
+
 # PWA files
 /public/sw.js
 /public/workbox-*.js

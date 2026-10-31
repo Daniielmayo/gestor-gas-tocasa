@@ -1,6 +1,6 @@
 .main {
   padding-top: var(--spacing-sm);
-  padding-bottom: 88px;
+  padding-bottom: var(--bottom-fab-clearance);
   display: flex;
   flex-direction: column;
   gap: 8px;
