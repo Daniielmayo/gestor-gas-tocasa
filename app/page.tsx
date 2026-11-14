@@ -304,12 +304,10 @@ export default function Dashboard() {
     const now = new Date();
     const currentMonth = now.getMonth();
     const currentYear = now.getFullYear();
-    const prevDate = new Date(currentYear, currentMonth - 1, 1);
-    const prevMonth = prevDate.getMonth();
-    const prevYear = prevDate.getFullYear();
+    const currentMonthStart = new Date(currentYear, currentMonth, 1);
 
-    let curr = 0;
-    let prev = 0;
+    let cumulativeBeforeCurrent = 0;
+    let currSigned = 0;
     const currTxs: EnhancedTransaction[] = [];
 
     for (const t of transactions) {
@@ -325,19 +323,24 @@ export default function Dashboard() {
       }
 
       const txDate = t.createdAt?.toDate ? t.createdAt.toDate() : new Date();
-      const m = txDate.getMonth();
-      const y = txDate.getFullYear();
       const signed = t.type === 'income' ? Number(t.amount) : -Number(t.amount);
 
-      if (m === currentMonth && y === currentYear) {
-        curr += signed;
+      if (txDate < currentMonthStart) {
+        cumulativeBeforeCurrent += signed;
+      } else if (txDate.getMonth() === currentMonth && txDate.getFullYear() === currentYear) {
+        currSigned += signed;
         currTxs.push(t);
-      } else if (m === prevMonth && y === prevYear) {
-        prev += signed;
       }
     }
 
-    return { currentMonthBalance: curr, prevMonthBalance: prev, currentMonthTxs: currTxs };
+    // currentMonthBalance is the cumulative remaining balance up to now
+    const totalRemainingBalance = cumulativeBeforeCurrent + currSigned;
+
+    return {
+      currentMonthBalance: totalRemainingBalance,
+      prevMonthBalance: cumulativeBeforeCurrent,
+      currentMonthTxs: currTxs,
+    };
   }, [transactions, globalScope, user, partnerUid]);
 
   // Active budget summary for Dashboard (Section 7)
@@ -737,7 +740,7 @@ export default function Dashboard() {
               className="text-label-md"
               style={{ color: 'var(--color-primary-container)', opacity: 0.9 }}
             >
-              Balance General del Mes ({globalScope.toUpperCase()})
+              Saldo General ({globalScope.toUpperCase()})
             </span>
             <h2
               className="text-display-lg"
@@ -757,7 +760,7 @@ export default function Dashboard() {
                 className="text-label-sm"
                 style={{ color: 'rgba(255,255,255,0.85)', fontVariantNumeric: 'tabular-nums' }}
               >
-                Mes anterior: {formatCOP(prevMonthBalance)}
+                Saldo arrastrado mes anterior: {formatCOP(prevMonthBalance)}
               </span>
             </div>
 

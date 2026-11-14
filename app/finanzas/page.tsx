@@ -231,6 +231,22 @@ export default function Finanzas() {
     return t.sharedWith && t.sharedWith.length > 0 ? 'conjunto' : 'personal';
   };
 
+  // Scope filter predicate helper
+  const matchesGlobalScope = (t: EnhancedTransaction) => {
+    if (!user) return false;
+    const scope = resolveTxScope(t);
+    const payer = t.paidByUserId || t.ownerId;
+
+    if (globalScope === 'mio') {
+      if (!(scope === 'personal' && t.ownerId === user.uid) && payer !== user.uid) return false;
+    } else if (globalScope === 'conjunto') {
+      if (scope !== 'conjunto') return false;
+    } else if (globalScope === 'pareja' && partnerUid) {
+      if (payer !== partnerUid && t.ownerId !== partnerUid) return false;
+    }
+    return true;
+  };
+
   // Transactions matching selected month + quincena + global scope + search/filters
   const periodTransactions = useMemo(() => {
     if (!user) return [];
@@ -244,16 +260,7 @@ export default function Finanzas() {
       if (quincenaFilter === 'q1' && txDate.getDate() > 15) return false;
       if (quincenaFilter === 'q2' && txDate.getDate() <= 15) return false;
 
-      const scope = resolveTxScope(t);
-      const payer = t.paidByUserId || t.ownerId;
-
-      if (globalScope === 'mio') {
-        if (!(scope === 'personal' && t.ownerId === user.uid) && payer !== user.uid) return false;
-      } else if (globalScope === 'conjunto') {
-        if (scope !== 'conjunto') return false;
-      } else if (globalScope === 'pareja' && partnerUid) {
-        if (payer !== partnerUid && t.ownerId !== partnerUid) return false;
-      }
+      if (!matchesGlobalScope(t)) return false;
 
       if (selectedCategoryFilter && t.category !== selectedCategoryFilter) return false;
       if (selectedMethodFilter && t.paymentMethodId !== selectedMethodFilter) return false;
@@ -280,13 +287,33 @@ export default function Finanzas() {
     partnerUid,
   ]);
 
+  // Cumulative balance prior to the start of this selected period
+  const carriedBalance = useMemo(() => {
+    if (!user) return 0;
+    const periodStart = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
+    if (quincenaFilter === 'q2') {
+      periodStart.setDate(16);
+    }
+
+    let sum = 0;
+    for (const t of transactions) {
+      if (!matchesGlobalScope(t)) continue;
+      const txDate = t.createdAt?.toDate ? t.createdAt.toDate() : new Date();
+      if (txDate < periodStart) {
+        sum += t.type === 'income' ? Number(t.amount || 0) : -Number(t.amount || 0);
+      }
+    }
+    return sum;
+  }, [transactions, currentDate, quincenaFilter, globalScope, user, partnerUid]);
+
   const totalIncome = periodTransactions
     .filter((t) => t.type === 'income')
     .reduce((acc, t) => acc + Number(t.amount || 0), 0);
   const totalExpense = periodTransactions
     .filter((t) => t.type === 'expense')
     .reduce((acc, t) => acc + Number(t.amount || 0), 0);
-  const balance = totalIncome - totalExpense;
+  const periodNet = totalIncome - totalExpense;
+  const balance = carriedBalance + periodNet;
 
   const currentBudgetDoc = useMemo(() => {
     const monthlyKey = getPeriodKey(currentDate, 'mensual');
@@ -308,7 +335,7 @@ export default function Finanzas() {
   // Group ledger movements by day with daily total and optional running balance
   const groupedLedgerDays = useMemo(() => {
     const asc = [...periodTransactions].reverse();
-    let running = 0;
+    let running = carriedBalance;
     const runningMap = new Map<string, number>();
     for (const tx of asc) {
       running += tx.type === 'income' ? Number(tx.amount) : -Number(tx.amount);
@@ -345,7 +372,7 @@ export default function Finanzas() {
     }
 
     return groups;
-  }, [periodTransactions]);
+  }, [periodTransactions, carriedBalance]);
 
   const handleSoftDeleteTransaction = async () => {
     if (!txToDelete || !user) return;
@@ -597,7 +624,7 @@ export default function Finanzas() {
       <section>
         <div className={styles.balanceCard}>
           <span className={styles.balanceTitle}>
-            Balance General ({globalScope.toUpperCase()})
+            Saldo General ({globalScope.toUpperCase()})
           </span>
           <h2
             className={`${styles.balanceAmount} ${
@@ -606,6 +633,20 @@ export default function Finanzas() {
           >
             {formatCOP(balance)}
           </h2>
+
+          {carriedBalance !== 0 && (
+            <div
+              style={{
+                fontSize: '11px',
+                color: 'var(--color-on-surface-variant)',
+                marginBottom: '6px',
+                fontVariantNumeric: 'tabular-nums',
+              }}
+            >
+              Saldo arrastrado anterior: {formatCOP(carriedBalance)}
+            </div>
+          )}
+
           <div
             style={{
               display: 'grid',
